@@ -1,0 +1,24 @@
+{
+  "originHash" : "9c47ec226e822e8f473dfcb8da42a4752e2c96c52b1f3da1ea1b8ebbbd21713a",
+  "pins" : [
+    {
+      "identity" : "gcdwebserver",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/SlaunchaMan/GCDWebServer.git",
+      "state" : {
+        "branch" : "swift-package-manager",
+        "revision" : "935e2736044e71e5341663c3cc9a335ba6867a2b"
+      }
+    },
+    {
+      "identity" : "webrtc-xcframework",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/livekit/webrtc-xcframework",
+      "state" : {
+        "revision" : "6a5f458cf55a598e4590cb30b739ab545fdbfcb1",
+        "version" : "144.7559.6"
+      }
+    }
+  ],
+  "version" : 3
+}

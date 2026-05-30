@@ -6,7 +6,27 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		257B96B02FBE714F00F78AB2 /* LiveKitWebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = 257B96AF2FBE714F00F78AB2 /* LiveKitWebRTC */; };
+		257B96B22FBE715A00F78AB2 /* LiveKitWebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = 257B96B12FBE715A00F78AB2 /* LiveKitWebRTC */; };
+		25F3C0D32FBBB8D9008CF1DA /* GCDWebServer in Frameworks */ = {isa = PBXBuildFile; productRef = 25F3C0D22FBBB8D9008CF1DA /* GCDWebServer */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
+		25F3C0772F97ECB4008CF1DA /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 25FA88F42EE9DE090017F32B /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 25F3C0692F97ECB2008CF1DA;
+			remoteInfo = musicMac;
+		};
+		25F3C0812F97ECB4008CF1DA /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 25FA88F42EE9DE090017F32B /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 25F3C0692F97ECB2008CF1DA;
+			remoteInfo = musicMac;
+		};
 		25FA890A2EE9DE0A0017F32B /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 25FA88F42EE9DE090017F32B /* Project object */;
@@ -24,14 +44,64 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		25F3C06A2F97ECB2008CF1DA /* musicMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = musicMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		25F3C0762F97ECB4008CF1DA /* musicMacTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = musicMacTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		25F3C0802F97ECB4008CF1DA /* musicMacUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = musicMacUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		25FA88FC2EE9DE090017F32B /* music.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = music.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		25FA89092EE9DE0A0017F32B /* musicTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = musicTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		25FA89132EE9DE0A0017F32B /* musicUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = musicUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		258EE17D2FC036470072A563 /* Exceptions for "musicMac" folder in "musicMac" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 25F3C0692F97ECB2008CF1DA /* musicMac */;
+		};
+		25F3C0922F97ECE0008CF1DA /* Exceptions for "music" folder in "musicMac" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				MultipeerManager.swift,
+				WebRTCManager.swift,
+			);
+			target = 25F3C0692F97ECB2008CF1DA /* musicMac */;
+		};
+		25FA892F2EE9F8300017F32B /* Exceptions for "music" folder in "music" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 25FA88FB2EE9DE090017F32B /* music */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		25F3C06B2F97ECB2008CF1DA /* musicMac */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				258EE17D2FC036470072A563 /* Exceptions for "musicMac" folder in "musicMac" target */,
+			);
+			path = musicMac;
+			sourceTree = "<group>";
+		};
+		25F3C0792F97ECB4008CF1DA /* musicMacTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = musicMacTests;
+			sourceTree = "<group>";
+		};
+		25F3C0832F97ECB4008CF1DA /* musicMacUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = musicMacUITests;
+			sourceTree = "<group>";
+		};
 		25FA88FE2EE9DE090017F32B /* music */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				25FA892F2EE9F8300017F32B /* Exceptions for "music" folder in "music" target */,
+				25F3C0922F97ECE0008CF1DA /* Exceptions for "music" folder in "musicMac" target */,
+			);
 			path = music;
 			sourceTree = "<group>";
 		};
@@ -48,10 +118,34 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		25F3C0672F97ECB2008CF1DA /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				257B96B22FBE715A00F78AB2 /* LiveKitWebRTC in Frameworks */,
+				25F3C0D32FBBB8D9008CF1DA /* GCDWebServer in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		25F3C0732F97ECB4008CF1DA /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		25F3C07D2F97ECB4008CF1DA /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		25FA88F92EE9DE090017F32B /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				257B96B02FBE714F00F78AB2 /* LiveKitWebRTC in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -72,12 +166,23 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		25A28C402FBE640800CFDFC7 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
 		25FA88F32EE9DE090017F32B = {
 			isa = PBXGroup;
 			children = (
 				25FA88FE2EE9DE090017F32B /* music */,
 				25FA890C2EE9DE0A0017F32B /* musicTests */,
 				25FA89162EE9DE0A0017F32B /* musicUITests */,
+				25F3C06B2F97ECB2008CF1DA /* musicMac */,
+				25F3C0792F97ECB4008CF1DA /* musicMacTests */,
+				25F3C0832F97ECB4008CF1DA /* musicMacUITests */,
+				25A28C402FBE640800CFDFC7 /* Frameworks */,
 				25FA88FD2EE9DE090017F32B /* Products */,
 			);
 			sourceTree = "<group>";
@@ -88,6 +193,9 @@
 				25FA88FC2EE9DE090017F32B /* music.app */,
 				25FA89092EE9DE0A0017F32B /* musicTests.xctest */,
 				25FA89132EE9DE0A0017F32B /* musicUITests.xctest */,
+				25F3C06A2F97ECB2008CF1DA /* musicMac.app */,
+				25F3C0762F97ECB4008CF1DA /* musicMacTests.xctest */,
+				25F3C0802F97ECB4008CF1DA /* musicMacUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -95,6 +203,76 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		25F3C0692F97ECB2008CF1DA /* musicMac */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 25F3C0882F97ECB4008CF1DA /* Build configuration list for PBXNativeTarget "musicMac" */;
+			buildPhases = (
+				25F3C0662F97ECB2008CF1DA /* Sources */,
+				25F3C0672F97ECB2008CF1DA /* Frameworks */,
+				25F3C0682F97ECB2008CF1DA /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				25F3C06B2F97ECB2008CF1DA /* musicMac */,
+			);
+			name = musicMac;
+			packageProductDependencies = (
+				25F3C0D22FBBB8D9008CF1DA /* GCDWebServer */,
+				257B96B12FBE715A00F78AB2 /* LiveKitWebRTC */,
+			);
+			productName = musicMac;
+			productReference = 25F3C06A2F97ECB2008CF1DA /* musicMac.app */;
+			productType = "com.apple.product-type.application";
+		};
+		25F3C0752F97ECB4008CF1DA /* musicMacTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 25F3C08B2F97ECB4008CF1DA /* Build configuration list for PBXNativeTarget "musicMacTests" */;
+			buildPhases = (
+				25F3C0722F97ECB4008CF1DA /* Sources */,
+				25F3C0732F97ECB4008CF1DA /* Frameworks */,
+				25F3C0742F97ECB4008CF1DA /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				25F3C0782F97ECB4008CF1DA /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				25F3C0792F97ECB4008CF1DA /* musicMacTests */,
+			);
+			name = musicMacTests;
+			packageProductDependencies = (
+			);
+			productName = musicMacTests;
+			productReference = 25F3C0762F97ECB4008CF1DA /* musicMacTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		25F3C07F2F97ECB4008CF1DA /* musicMacUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 25F3C08E2F97ECB4008CF1DA /* Build configuration list for PBXNativeTarget "musicMacUITests" */;
+			buildPhases = (
+				25F3C07C2F97ECB4008CF1DA /* Sources */,
+				25F3C07D2F97ECB4008CF1DA /* Frameworks */,
+				25F3C07E2F97ECB4008CF1DA /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				25F3C0822F97ECB4008CF1DA /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				25F3C0832F97ECB4008CF1DA /* musicMacUITests */,
+			);
+			name = musicMacUITests;
+			packageProductDependencies = (
+			);
+			productName = musicMacUITests;
+			productReference = 25F3C0802F97ECB4008CF1DA /* musicMacUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 		25FA88FB2EE9DE090017F32B /* music */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 25FA891D2EE9DE0A0017F32B /* Build configuration list for PBXNativeTarget "music" */;
@@ -112,6 +290,7 @@
 			);
 			name = music;
 			packageProductDependencies = (
+				257B96AF2FBE714F00F78AB2 /* LiveKitWebRTC */,
 			);
 			productName = music;
 			productReference = 25FA88FC2EE9DE090017F32B /* music.app */;
@@ -170,9 +349,20 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
-				LastSwiftUpdateCheck = 2610;
+				LastSwiftUpdateCheck = 2640;
 				LastUpgradeCheck = 2610;
 				TargetAttributes = {
+					25F3C0692F97ECB2008CF1DA = {
+						CreatedOnToolsVersion = 26.4.1;
+					};
+					25F3C0752F97ECB4008CF1DA = {
+						CreatedOnToolsVersion = 26.4.1;
+						TestTargetID = 25F3C0692F97ECB2008CF1DA;
+					};
+					25F3C07F2F97ECB4008CF1DA = {
+						CreatedOnToolsVersion = 26.4.1;
+						TestTargetID = 25F3C0692F97ECB2008CF1DA;
+					};
 					25FA88FB2EE9DE090017F32B = {
 						CreatedOnToolsVersion = 26.1.1;
 					};
@@ -195,6 +385,10 @@
 			);
 			mainGroup = 25FA88F32EE9DE090017F32B;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				25F3C0D12FBBB8D9008CF1DA /* XCRemoteSwiftPackageReference "GCDWebServer" */,
+				257B96AE2FBE713200F78AB2 /* XCRemoteSwiftPackageReference "webrtc-xcframework" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 25FA88FD2EE9DE090017F32B /* Products */;
 			projectDirPath = "";
@@ -203,11 +397,35 @@
 				25FA88FB2EE9DE090017F32B /* music */,
 				25FA89082EE9DE0A0017F32B /* musicTests */,
 				25FA89122EE9DE0A0017F32B /* musicUITests */,
+				25F3C0692F97ECB2008CF1DA /* musicMac */,
+				25F3C0752F97ECB4008CF1DA /* musicMacTests */,
+				25F3C07F2F97ECB4008CF1DA /* musicMacUITests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		25F3C0682F97ECB2008CF1DA /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		25F3C0742F97ECB4008CF1DA /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		25F3C07E2F97ECB4008CF1DA /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		25FA88FA2EE9DE090017F32B /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -232,6 +450,27 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		25F3C0662F97ECB2008CF1DA /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		25F3C0722F97ECB4008CF1DA /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		25F3C07C2F97ECB4008CF1DA /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		25FA88F82EE9DE090017F32B /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -256,6 +495,16 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		25F3C0782F97ECB4008CF1DA /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 25F3C0692F97ECB2008CF1DA /* musicMac */;
+			targetProxy = 25F3C0772F97ECB4008CF1DA /* PBXContainerItemProxy */;
+		};
+		25F3C0822F97ECB4008CF1DA /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 25F3C0692F97ECB2008CF1DA /* musicMac */;
+			targetProxy = 25F3C0812F97ECB4008CF1DA /* PBXContainerItemProxy */;
+		};
 		25FA890B2EE9DE0A0017F32B /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 25FA88FB2EE9DE090017F32B /* music */;
@@ -269,6 +518,186 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		25F3C0892F97ECB4008CF1DA /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 85S97N4J48;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_FILE_ACCESS_MUSIC_FOLDER = readwrite;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_INCOMING_NETWORK_CONNECTIONS = YES;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = NO;
+				ENABLE_RESOURCE_ACCESS_BLUETOOTH = NO;
+				ENABLE_RESOURCE_ACCESS_CALENDARS = NO;
+				ENABLE_RESOURCE_ACCESS_CAMERA = NO;
+				ENABLE_RESOURCE_ACCESS_CONTACTS = NO;
+				ENABLE_RESOURCE_ACCESS_LOCATION = NO;
+				ENABLE_RESOURCE_ACCESS_PRINTING = NO;
+				ENABLE_RESOURCE_ACCESS_USB = NO;
+				ENABLE_USER_SELECTED_FILES = readwrite;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = musicMac/Info.plist;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "This app needs to connect to your iPhone to stream music";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.3;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.matthwenoren.musicMac;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		25F3C08A2F97ECB4008CF1DA /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 85S97N4J48;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_FILE_ACCESS_MUSIC_FOLDER = readwrite;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_INCOMING_NETWORK_CONNECTIONS = YES;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = NO;
+				ENABLE_RESOURCE_ACCESS_BLUETOOTH = NO;
+				ENABLE_RESOURCE_ACCESS_CALENDARS = NO;
+				ENABLE_RESOURCE_ACCESS_CAMERA = NO;
+				ENABLE_RESOURCE_ACCESS_CONTACTS = NO;
+				ENABLE_RESOURCE_ACCESS_LOCATION = NO;
+				ENABLE_RESOURCE_ACCESS_PRINTING = NO;
+				ENABLE_RESOURCE_ACCESS_USB = NO;
+				ENABLE_USER_SELECTED_FILES = readwrite;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = musicMac/Info.plist;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "This app needs to connect to your iPhone to stream music";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.3;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.matthwenoren.musicMac;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		25F3C08C2F97ECB4008CF1DA /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 85S97N4J48;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.3;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.matthwenoren.musicMacTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/musicMac.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/musicMac";
+			};
+			name = Debug;
+		};
+		25F3C08D2F97ECB4008CF1DA /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 85S97N4J48;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.3;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.matthwenoren.musicMacTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/musicMac.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/musicMac";
+			};
+			name = Release;
+		};
+		25F3C08F2F97ECB4008CF1DA /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 85S97N4J48;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.3;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.matthwenoren.musicMacUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_TARGET_NAME = musicMac;
+			};
+			name = Debug;
+		};
+		25F3C0902F97ECB4008CF1DA /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 85S97N4J48;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.3;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.matthwenoren.musicMacUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_TARGET_NAME = musicMac;
+			};
+			name = Release;
+		};
 		25FA891B2EE9DE0A0017F32B /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -390,6 +819,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = music/music.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 85S97N4J48;
@@ -398,6 +828,11 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = music/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "";
+				INFOPLIST_KEY_LSApplicationCategoryType = "";
+				INFOPLIST_KEY_NSAppleMusicUsageDescription = "We need access to your library to play and organize your music.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "This app needs to use your local network to sync live lyrics and playback with your Mac.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -434,6 +869,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = music/music.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 85S97N4J48;
@@ -442,6 +878,11 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = music/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "";
+				INFOPLIST_KEY_LSApplicationCategoryType = "";
+				INFOPLIST_KEY_NSAppleMusicUsageDescription = "We need access to your library to play and organize your music.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "This app needs to use your local network to sync live lyrics and playback with your Mac.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -578,6 +1019,33 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		25F3C0882F97ECB4008CF1DA /* Build configuration list for PBXNativeTarget "musicMac" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				25F3C0892F97ECB4008CF1DA /* Debug */,
+				25F3C08A2F97ECB4008CF1DA /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		25F3C08B2F97ECB4008CF1DA /* Build configuration list for PBXNativeTarget "musicMacTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				25F3C08C2F97ECB4008CF1DA /* Debug */,
+				25F3C08D2F97ECB4008CF1DA /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		25F3C08E2F97ECB4008CF1DA /* Build configuration list for PBXNativeTarget "musicMacUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				25F3C08F2F97ECB4008CF1DA /* Debug */,
+				25F3C0902F97ECB4008CF1DA /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		25FA88F72EE9DE090017F32B /* Build configuration list for PBXProject "music" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -615,6 +1083,43 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		257B96AE2FBE713200F78AB2 /* XCRemoteSwiftPackageReference "webrtc-xcframework" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/livekit/webrtc-xcframework";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 144.7559.6;
+			};
+		};
+		25F3C0D12FBBB8D9008CF1DA /* XCRemoteSwiftPackageReference "GCDWebServer" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/SlaunchaMan/GCDWebServer.git";
+			requirement = {
+				branch = "swift-package-manager";
+				kind = branch;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		257B96AF2FBE714F00F78AB2 /* LiveKitWebRTC */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 257B96AE2FBE713200F78AB2 /* XCRemoteSwiftPackageReference "webrtc-xcframework" */;
+			productName = LiveKitWebRTC;
+		};
+		257B96B12FBE715A00F78AB2 /* LiveKitWebRTC */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 257B96AE2FBE713200F78AB2 /* XCRemoteSwiftPackageReference "webrtc-xcframework" */;
+			productName = LiveKitWebRTC;
+		};
+		25F3C0D22FBBB8D9008CF1DA /* GCDWebServer */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 25F3C0D12FBBB8D9008CF1DA /* XCRemoteSwiftPackageReference "GCDWebServer" */;
+			productName = GCDWebServer;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 25FA88F42EE9DE090017F32B /* Project object */;
 }
