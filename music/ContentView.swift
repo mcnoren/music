@@ -59,6 +59,7 @@ struct UnifiedArtworkView: View {
 class NavigationStateManager: ObservableObject {
     @Published var navigationPath = NavigationPath()
     @Published var scrollID: String?
+    @Published var currentAlbumID: String? = nil // <-- Add this
 }
 
 // MARK: - External Display Manager (For Apple TV / Screen Mirroring)
@@ -290,17 +291,25 @@ struct PortraitLayout: View {
                     }
                 }
                 .navigationDestination(for: MPMediaItemCollection.self) { collection in
-                    if let rep = collection.representativeItem, rep.albumTitle != nil { AlbumDetailView(album: collection, audioManager: audioManager, library: library) }
+                    if let rep = collection.representativeItem, rep.albumTitle != nil {
+                        AlbumDetailView(album: collection, audioManager: audioManager, library: library)
+                            .onAppear { navState.currentAlbumID = String(collection.persistentID) }
+                            .onDisappear { if navState.currentAlbumID == String(collection.persistentID) { navState.currentAlbumID = nil } }
+                    }
                     else { PlaylistDetailView(playlist: collection, audioManager: audioManager, library: library) }
                 }
                 .navigationDestination(for: UnifiedAlbumItem.self) { item in
                     DynamicAlbumWrapper(item: item, library: library, audioManager: audioManager)
+                        .onAppear { navState.currentAlbumID = item.id }
+                        .onDisappear { if navState.currentAlbumID == item.id { navState.currentAlbumID = nil } }
                 }
                 .navigationDestination(for: UnifiedArtistItem.self) { item in
                     UnifiedArtistDetailView(item: item, library: library, audioManager: audioManager)
                 }
                 .navigationDestination(for: RemoteAlbumWrapper.self) { wrapper in
                     UniversalAlbumDetailView(albumName: wrapper.name, collection: .remote(wrapper.songs))
+                        .onAppear { navState.currentAlbumID = "remote_\(wrapper.name)" }
+                        .onDisappear { if navState.currentAlbumID == "remote_\(wrapper.name)" { navState.currentAlbumID = nil } }
                 }
                 .navigationDestination(for: RemoteArtistWrapper.self) { wrapper in
                     RemoteArtistDetailView(artistName: wrapper.name, multipeer: MultipeerManager.shared)
@@ -311,7 +320,6 @@ struct PortraitLayout: View {
         }
         .accentColor(.pink)
         .sheet(isPresented: $showSettings) { SettingsView(settings: settings) }
-        // ADD THIS: Listen for the album tap from the FullPlayerView
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("NavigateToAlbum"))) { notification in
             guard let songId = notification.object as? String else { return }
             
@@ -319,34 +327,55 @@ struct PortraitLayout: View {
             if let song = library.songs.first(where: { String($0.persistentID) == songId }),
                let album = library.albums.first(where: { $0.persistentID == song.albumPersistentID }) {
                 
+                let targetAlbumID = String(album.persistentID)
+                if navState.currentAlbumID == targetAlbumID { return } // Already on page!
+                
                 let item = UnifiedAlbumItem(
-                    id: String(album.persistentID),
+                    id: targetAlbumID,
                     title: album.representativeItem?.albumTitle ?? "Unknown",
                     artist: album.representativeItem?.artist ?? "Unknown",
                     sortTitle: album.representativeItem?.albumTitle ?? "Unknown",
                     appleAlbum: album,
                     localWrapper: nil
                 )
-                navState.navigationPath.append(item)
+                
+                // Clear the stack and push safely
+                var newPath = NavigationPath()
+                newPath.append(item)
+                navState.navigationPath = newPath
                 
             // 2. Check if it's a Local Downloaded Song
             } else if let localSong = DownloadsManager.shared.downloadedSongs.first(where: { $0.id == songId }) {
                 let albumName = localSong.album
-                let songs = DownloadsManager.shared.downloadedSongs.filter { $0.album == albumName }
+                let targetAlbumID = "local_\(albumName)"
+                if navState.currentAlbumID == targetAlbumID { return } // Already on page!
                 
+                let songs = DownloadsManager.shared.downloadedSongs.filter { $0.album == albumName }
                 let item = UnifiedAlbumItem(
-                    id: "local_\(albumName)",
+                    id: targetAlbumID,
                     title: albumName,
                     artist: localSong.artist,
                     sortTitle: albumName,
                     appleAlbum: nil,
                     localWrapper: LocalAlbumWrapper(name: albumName, songs: songs)
                 )
-                navState.navigationPath.append(item)
+                
+                // Clear the stack and push safely
+                var newPath = NavigationPath()
+                newPath.append(item)
+                navState.navigationPath = newPath
                 
             // 3. Check if it's a Remote Mac Stream
             } else if let remoteSong = audioManager.currentRemoteDTO, remoteSong.id == songId {
-                navState.navigationPath.append(RemoteAlbumWrapper(name: remoteSong.album, songs: []))
+                let targetAlbumID = "remote_\(remoteSong.album)"
+                if navState.currentAlbumID == targetAlbumID { return } // Already on page!
+                
+                let item = RemoteAlbumWrapper(name: remoteSong.album, songs: [])
+                
+                // Clear the stack and push safely
+                var newPath = NavigationPath()
+                newPath.append(item)
+                navState.navigationPath = newPath
             }
         }
     }
