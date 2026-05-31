@@ -440,8 +440,10 @@ class MacLibrary: ObservableObject {
                 }
             }
         }
+        let stableID = "\(title)-\(artist)".lowercased()
+            .replacingOccurrences(of: " ", with: "")
+            .replacingOccurrences(of: ":", with: "")
         
-        let stableID = "\(title)-\(artist)".lowercased().replacingOccurrences(of: " ", with: "")
         return MacSong(id: stableID, url: url, title: title, artist: artist, album: album, genre: genre, lyrics: lyrics, duration: duration, trackNumber: trackNumber, discNumber: discNumber)
     }
 }
