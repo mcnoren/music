@@ -324,13 +324,19 @@ struct AppPlaylistDetailView: View {
     @ObservedObject var audioManager = AudioManager.shared
     @State private var selectedPhoto: PhotosPickerItem? = nil
     
+    // NEW: Cache
+    @State private var cachedUnifiedSongs: [UnifiedSongItem] = []
+    
     var currentPlaylist: AppPlaylist? {
         library.customPlaylists.first { $0.id == playlist.id }
     }
     
-    var unifiedSongs: [UnifiedSongItem] {
-        guard let pl = currentPlaylist else { return [] }
-        return pl.songIDs.compactMap { idStr in
+    func loadSongs() {
+        guard let pl = currentPlaylist else {
+            cachedUnifiedSongs = []
+            return
+        }
+        cachedUnifiedSongs = pl.songIDs.compactMap { idStr in
             if idStr.hasPrefix("apple_"), let appleID = UInt64(idStr.dropFirst(6)) {
                 if let song = library.songs.first(where: { $0.persistentID == appleID }) {
                     return UnifiedSongItem(id: idStr, title: song.title ?? "", artist: song.artist ?? "", sortTitle: "", appleSong: song, localSong: nil)
@@ -369,25 +375,27 @@ struct AppPlaylistDetailView: View {
                     }
                     
                     Section(header: Text("Songs")) {
-                        if unifiedSongs.isEmpty {
+                        if cachedUnifiedSongs.isEmpty {
                             Text("No songs added yet. Long press a song anywhere in your library to add it here.")
                                 .foregroundColor(.secondary)
                         } else {
-                            ForEach(unifiedSongs) { item in
+                            ForEach(cachedUnifiedSongs) { item in
                                 if let apple = item.appleSong {
                                     SongRow(song: apple, audioManager: audioManager, library: library, showArtwork: true, showTrackNumber: false)
                                         .onTapGesture {
-                                            audioManager.play(song: apple, queue: unifiedSongs.compactMap { $0.appleSong }) // Quick fallback for playing
+                                            audioManager.play(song: apple, queue: cachedUnifiedSongs.compactMap { $0.appleSong })
                                         }
                                 } else if let local = item.localSong {
-                                    DownloadsSongRow(song: local, queue: unifiedSongs.compactMap { $0.localSong }, showArtwork: true, showTrackNumber: false, audioManager: audioManager)
+                                    DownloadsSongRow(song: local, queue: cachedUnifiedSongs.compactMap { $0.localSong }, showArtwork: true, showTrackNumber: false, audioManager: audioManager)
                                 }
                             }
                             .onMove { source, dest in
                                 library.moveSongsInPlaylist(playlistId: pl.id, from: source, to: dest)
+                                loadSongs()
                             }
                             .onDelete { offsets in
                                 library.deleteSongFromPlaylist(playlistId: pl.id, at: offsets)
+                                loadSongs()
                             }
                         }
                     }
@@ -398,6 +406,8 @@ struct AppPlaylistDetailView: View {
         .navigationTitle(currentPlaylist?.title ?? "Playlist")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { EditButton() }
+        .onAppear { loadSongs() }
+        .onChange(of: currentPlaylist?.songIDs) { _ in loadSongs() }
         .onChange(of: selectedPhoto) { newItem in
             Task {
                 if let data = try? await newItem?.loadTransferable(type: Data.self) {
@@ -407,7 +417,6 @@ struct AppPlaylistDetailView: View {
         }
     }
 }
-
 // MARK: - Portrait Layout Routing
 struct PortraitLayout: View {
     @ObservedObject var library: LibraryManager
@@ -613,7 +622,7 @@ struct ExpandableDescriptionView: View {
                 // Ensure the navigation bar reflects the background color
                 .toolbarBackground(backgroundColor, for: .navigationBar)
                 .toolbarBackground(.visible, for: .navigationBar)
-                .toolbarColorScheme(textColor.luminance < 0.5 ? .light : .dark, for: .navigationBar)
+                .toolbarColorScheme(backgroundColor == Color(.systemBackground) ? nil : (backgroundColor.luminance < 0.5 ? .dark : .light), for: .navigationBar)
             }
         }
     }
@@ -1059,13 +1068,16 @@ struct UnifiedPlaylistDetailView: View {
     @ObservedObject var audioManager: AudioManager
     @State private var selectedPhoto: PhotosPickerItem? = nil
     
+    // NEW: Cache the songs to prevent heavy lookups on every audio tick
+    @State private var cachedUnifiedSongs: [UnifiedSongItem] = []
+    
     var customPlaylist: AppPlaylist? { library.customPlaylists.first { $0.id == item.id } }
     
-    var unifiedSongs: [UnifiedSongItem] {
+    func loadSongs() {
         if let apple = item.applePlaylist {
-            return apple.items.map { UnifiedSongItem(id: "apple_\($0.persistentID)", title: $0.title ?? "", artist: $0.artist ?? "", sortTitle: "", appleSong: $0, localSong: nil) }
+            cachedUnifiedSongs = apple.items.map { UnifiedSongItem(id: "apple_\($0.persistentID)", title: $0.title ?? "", artist: $0.artist ?? "", sortTitle: "", appleSong: $0, localSong: nil) }
         } else if let custom = customPlaylist {
-            return custom.songIDs.compactMap { idStr in
+            cachedUnifiedSongs = custom.songIDs.compactMap { idStr in
                 if idStr.hasPrefix("apple_"), let appleID = UInt64(idStr.dropFirst(6)), let song = library.songs.first(where: { $0.persistentID == appleID }) {
                     return UnifiedSongItem(id: idStr, title: song.title ?? "", artist: song.artist ?? "", sortTitle: "", appleSong: song, localSong: nil)
                 } else if idStr.hasPrefix("local_"), let song = DownloadsManager.shared.downloadedSongs.first(where: { $0.id == String(idStr.dropFirst(6)) }) {
@@ -1073,17 +1085,18 @@ struct UnifiedPlaylistDetailView: View {
                 }
                 return nil
             }
+        } else {
+            cachedUnifiedSongs = []
         }
-        return []
     }
     
     var body: some View {
         ZStack {
             Color(.systemBackground).ignoresSafeArea()
             
-            ScrollView {
-                VStack(spacing: 0) {
-                    // Header mimicking Album Detail View
+            // NEW: Upgraded to 'List' to activate native EditButton capabilities
+            List {
+                Section {
                     VStack(spacing: 16) {
                         PhotosPicker(selection: $selectedPhoto, matching: .images) {
                             if let custom = customPlaylist, let data = custom.artworkData, let uiImage = UIImage(data: data) {
@@ -1098,29 +1111,29 @@ struct UnifiedPlaylistDetailView: View {
                                     )
                             }
                         }
-                        .disabled(item.customPlaylist == nil) // Only allow editing custom playlists
+                        .disabled(item.customPlaylist == nil)
                         
                         VStack(spacing: 4) {
                             Text(item.title).font(.title2).bold().multilineTextAlignment(.center)
                             Text("Playlist").font(.title3).foregroundColor(.secondary)
-                            Text("\(unifiedSongs.count) Songs").font(.caption).foregroundColor(.gray).padding(.top, 2)
+                            Text("\(cachedUnifiedSongs.count) Songs").font(.caption).foregroundColor(.gray).padding(.top, 2)
                         }
                         .padding(.horizontal, 20)
                         
                         HStack(spacing: 20) {
                             Button(action: {
-                                if let first = unifiedSongs.first {
-                                    if let apple = first.appleSong { audioManager.play(song: apple, queue: unifiedSongs.compactMap { $0.appleSong }) }
-                                    else if let local = first.localSong { audioManager.play(localSong: local, queue: unifiedSongs.compactMap { $0.localSong }) }
+                                if let first = cachedUnifiedSongs.first {
+                                    if let apple = first.appleSong { audioManager.play(song: apple, queue: cachedUnifiedSongs.compactMap { $0.appleSong }) }
+                                    else if let local = first.localSong { audioManager.play(localSong: local, queue: cachedUnifiedSongs.compactMap { $0.localSong }) }
                                 }
                             }) {
                                 HStack { Image(systemName: "play.fill"); Text("Play") }.font(.headline).foregroundColor(.pink).frame(width: 160, height: 54).background(Color.gray.opacity(0.1)).clipShape(Capsule())
                             }
                             Button(action: {
                                 audioManager.isShuffled = true
-                                if let random = unifiedSongs.randomElement() {
-                                    if let apple = random.appleSong { audioManager.play(song: apple, queue: unifiedSongs.compactMap { $0.appleSong }) }
-                                    else if let local = random.localSong { audioManager.play(localSong: local, queue: unifiedSongs.compactMap { $0.localSong }) }
+                                if let random = cachedUnifiedSongs.randomElement() {
+                                    if let apple = random.appleSong { audioManager.play(song: apple, queue: cachedUnifiedSongs.compactMap { $0.appleSong }) }
+                                    else if let local = random.localSong { audioManager.play(localSong: local, queue: cachedUnifiedSongs.compactMap { $0.localSong }) }
                                 }
                             }) {
                                 HStack { Image(systemName: "shuffle"); Text("Shuffle") }.font(.headline).foregroundColor(.pink).frame(width: 160, height: 54).background(Color.gray.opacity(0.1)).clipShape(Capsule())
@@ -1129,33 +1142,54 @@ struct UnifiedPlaylistDetailView: View {
                     }
                     .padding(.top, 20)
                     .padding(.bottom, 20)
-                    
-                    // Song List
-                    if unifiedSongs.isEmpty {
+                    .frame(maxWidth: .infinity)
+                }
+                .listRowInsets(EdgeInsets())
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
+                
+                Section {
+                    if cachedUnifiedSongs.isEmpty {
                         Text("No songs added yet. Long press a song to add it here.")
                             .foregroundColor(.secondary)
                             .padding(.top, 40)
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
                     } else {
-                        LazyVStack(alignment: .leading, spacing: 0) {
-                            ForEach(Array(unifiedSongs.enumerated()), id: \.element.id) { index, songItem in
-                                if let apple = songItem.appleSong {
-                                    SongRow(song: apple, audioManager: audioManager, library: library, showArtwork: true, showTrackNumber: false)
-                                        .onTapGesture { audioManager.play(song: apple, queue: unifiedSongs.compactMap { $0.appleSong }) }
-                                } else if let local = songItem.localSong {
-                                    DownloadsSongRow(song: local, queue: unifiedSongs.compactMap { $0.localSong }, showArtwork: true, showTrackNumber: false, audioManager: audioManager)
-                                }
-                                Divider().padding(.leading)
+                        ForEach(cachedUnifiedSongs) { songItem in
+                            if let apple = songItem.appleSong {
+                                SongRow(song: apple, audioManager: audioManager, library: library, showArtwork: true, showTrackNumber: false)
+                                    .onTapGesture { audioManager.play(song: apple, queue: cachedUnifiedSongs.compactMap { $0.appleSong }) }
+                            } else if let local = songItem.localSong {
+                                DownloadsSongRow(song: local, queue: cachedUnifiedSongs.compactMap { $0.localSong }, showArtwork: true, showTrackNumber: false, audioManager: audioManager)
+                            }
+                        }
+                        .onMove { source, dest in
+                            if let pl = customPlaylist {
+                                library.moveSongsInPlaylist(playlistId: pl.id, from: source, to: dest)
+                                loadSongs() // Sync state after edit
+                            }
+                        }
+                        .onDelete { offsets in
+                            if let pl = customPlaylist {
+                                library.deleteSongFromPlaylist(playlistId: pl.id, at: offsets)
+                                loadSongs() // Sync state after delete
                             }
                         }
                     }
-                    Spacer().frame(height: 100)
                 }
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
             }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if item.customPlaylist != nil { EditButton() }
         }
+        .onAppear { loadSongs() }
+        .onChange(of: customPlaylist?.songIDs) { _ in loadSongs() }
         .onChange(of: selectedPhoto) { newItem in
             Task {
                 if let data = try? await newItem?.loadTransferable(type: Data.self) {
