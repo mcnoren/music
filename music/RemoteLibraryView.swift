@@ -761,12 +761,12 @@ struct UniversalAlbumDetailView: View {
 
     var albumTextColor: Color {
         if let hex = library.albumTextColorPrefs[albumID] { return Color(hex: hex) }
-        return customBgColor != nil ? .white : .primary
+        return customBgColor?.adaptivePrimary ?? .primary
     }
 
     var songTextColor: Color {
         if let hex = library.songTextColorPrefs[albumID] { return Color(hex: hex) }
-        return customBgColor != nil ? .white.opacity(0.8) : .primary
+        return customBgColor?.adaptiveSecondary ?? .primary
     }
     
     var computedActiveSongs: AlbumSongCollection {
@@ -1003,9 +1003,15 @@ struct UniversalAlbumDetailView: View {
 
                             if let desc = library.customAlbumDescriptions[albumID], !desc.isEmpty {
                                 let currentBgColor = library.customAlbumColors[albumID] != nil ? Color(customHex: library.customAlbumColors[albumID]!) : Color(.systemBackground)
-                                ExpandableDescriptionView(text: desc, albumTitle: albumName, backgroundColor: currentBgColor)
-                                    .padding(.horizontal, 24)
-                                    .padding(.top, 16)
+                                
+                                ExpandableDescriptionView(
+                                    text: desc,
+                                    albumTitle: albumName,
+                                    backgroundColor: currentBgColor,
+                                    textColor: songTextColor // <-- Pass the adaptive color
+                                )
+                                .padding(.horizontal, 24)
+                                .padding(.top, 16)
                             }
                             
                             Spacer().frame(height: 20)
@@ -1013,7 +1019,13 @@ struct UniversalAlbumDetailView: View {
                         .padding(.top, 0)
                     } else {
                         VStack(spacing: 16) {
-                            if let data = artworkData, let uiImage = UIImage(data: data) {
+                            // Add the video check here for the standard layout
+                            if let videoURL = library.albumVideoArt[albumID] {
+                                AnimatedVideoArtView(videoURL: videoURL, crop: library.albumArtCrops[albumID])
+                                    .frame(width: 250, height: 250)
+                                    .cornerRadius(12)
+                                    .shadow(radius: 10)
+                            } else if let data = artworkData, let uiImage = UIImage(data: data) {
                                 Image(uiImage: uiImage).resizable().aspectRatio(contentMode: .fit).frame(width: 250, height: 250).cornerRadius(12).shadow(radius: 10)
                             } else {
                                 Rectangle().fill(Color.gray.opacity(0.3)).frame(width: 250, height: 250).cornerRadius(12)

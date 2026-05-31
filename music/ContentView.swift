@@ -55,6 +55,11 @@ struct UnifiedArtworkView: View {
     }
 }
 
+struct SongIDsWrapper: Identifiable {
+    let id = UUID()
+    let ids: [String]
+}
+
 // MARK: - Navigation & Scroll State Manager
 class NavigationStateManager: ObservableObject {
     @Published var navigationPath = NavigationPath()
@@ -183,6 +188,8 @@ struct ContentView: View {
     @StateObject var webrtc = WebRTCManager.shared
     
     @State private var showSearchSheet = false
+    @State private var songIdToPlaylist: StringIdentifiable? = nil
+    @State private var songIDsToPlaylist: SongIDsWrapper? = nil
     
     var body: some View {
         GeometryReader { geometry in
@@ -231,6 +238,22 @@ struct ContentView: View {
                             .navigationBarItems(trailing: Button("Done") { showSearchSheet = false })
                     }
                 }
+                .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("ShowAddToPlaylist"))) { notif in
+                    if let id = notif.object as? String {
+                        songIdToPlaylist = StringIdentifiable(value: id)
+                    }
+                }
+                .sheet(item: $songIdToPlaylist) { item in
+                    AddToPlaylistSheet(songId: item.value)
+                }
+                .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("ShowAddToPlaylist"))) { notif in
+                    if let ids = notif.object as? [String] {
+                        songIDsToPlaylist = SongIDsWrapper(ids: ids)
+                    }
+                }
+                .sheet(item: $songIDsToPlaylist) { wrapper in
+                    AddToPlaylistSheet(songIDs: wrapper.ids)
+                }
             }
         }
         .onAppear {
@@ -256,6 +279,140 @@ struct ContentView: View {
         } else if let remoteSong = audioManager.currentRemoteDTO {
             let hasSynced = library.getSyncedLyrics(id: remoteSong.id, title: remoteSong.title, artist: remoteSong.artist)?.isFullySynced == true
             if hasSynced { uiState.showLyrics = true }
+        }
+    }
+}
+
+// MARK: - Custom Playlist Views
+struct StringIdentifiable: Identifiable {
+    let id = UUID()
+    let value: String
+}
+
+struct AddToPlaylistSheet: View {
+    let songIDs: [String]
+    @ObservedObject var library = LibraryManager.shared
+    @Environment(\.dismiss) var dismiss
+    
+    var body: some View {
+        NavigationView {
+            List {
+                if library.customPlaylists.isEmpty {
+                    Text("No custom playlists yet. Create one in the Playlists tab!")
+                        .foregroundColor(.secondary)
+                } else {
+                    ForEach(library.customPlaylists) { playlist in
+                        Button(action: {
+                            library.addSongsToPlaylist(songIDs: songIDs, playlistId: playlist.id)
+                            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                            dismiss()
+                        }) {
+                            HStack {
+                                if let data = playlist.artworkData, let uiImage = UIImage(data: data) {
+                                    Image(uiImage: uiImage).resizable().frame(width: 40, height: 40).cornerRadius(4)
+                                } else {
+                                    Rectangle().fill(Color.gray.opacity(0.3)).frame(width: 40, height: 40).cornerRadius(4)
+                                        .overlay(Image(systemName: "music.note.list").foregroundColor(.white))
+                                }
+                                Text(playlist.title).foregroundColor(.primary)
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Add to Playlist")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
+        }
+    }
+}
+
+struct AppPlaylistDetailView: View {
+    let playlist: AppPlaylist
+    @ObservedObject var library = LibraryManager.shared
+    @ObservedObject var audioManager = AudioManager.shared
+    @State private var selectedPhoto: PhotosPickerItem? = nil
+    
+    var currentPlaylist: AppPlaylist? {
+        library.customPlaylists.first { $0.id == playlist.id }
+    }
+    
+    var unifiedSongs: [UnifiedSongItem] {
+        guard let pl = currentPlaylist else { return [] }
+        return pl.songIDs.compactMap { idStr in
+            if idStr.hasPrefix("apple_"), let appleID = UInt64(idStr.dropFirst(6)) {
+                if let song = library.songs.first(where: { $0.persistentID == appleID }) {
+                    return UnifiedSongItem(id: idStr, title: song.title ?? "", artist: song.artist ?? "", sortTitle: "", appleSong: song, localSong: nil)
+                }
+            } else if idStr.hasPrefix("local_") {
+                let localId = String(idStr.dropFirst(6))
+                if let song = DownloadsManager.shared.downloadedSongs.first(where: { $0.id == localId }) {
+                    return UnifiedSongItem(id: idStr, title: song.title, artist: song.artist, sortTitle: "", appleSong: nil, localSong: song)
+                }
+            }
+            return nil
+        }
+    }
+    
+    var body: some View {
+        VStack {
+            if let pl = currentPlaylist {
+                List {
+                    Section {
+                        HStack(spacing: 16) {
+                            PhotosPicker(selection: $selectedPhoto, matching: .images) {
+                                if let data = pl.artworkData, let uiImage = UIImage(data: data) {
+                                    Image(uiImage: uiImage).resizable().scaledToFill().frame(width: 120, height: 120).cornerRadius(8)
+                                } else {
+                                    Rectangle().fill(Color.gray.opacity(0.3)).frame(width: 120, height: 120).cornerRadius(8)
+                                        .overlay(
+                                            VStack {
+                                                Image(systemName: "photo.badge.plus").font(.title)
+                                                Text("Add Cover").font(.caption).padding(.top, 4)
+                                            }.foregroundColor(.white)
+                                        )
+                                }
+                            }
+                            Text(pl.title).font(.title).bold()
+                        }.padding(.vertical, 8)
+                    }
+                    
+                    Section(header: Text("Songs")) {
+                        if unifiedSongs.isEmpty {
+                            Text("No songs added yet. Long press a song anywhere in your library to add it here.")
+                                .foregroundColor(.secondary)
+                        } else {
+                            ForEach(unifiedSongs) { item in
+                                if let apple = item.appleSong {
+                                    SongRow(song: apple, audioManager: audioManager, library: library, showArtwork: true, showTrackNumber: false)
+                                        .onTapGesture {
+                                            audioManager.play(song: apple, queue: unifiedSongs.compactMap { $0.appleSong }) // Quick fallback for playing
+                                        }
+                                } else if let local = item.localSong {
+                                    DownloadsSongRow(song: local, queue: unifiedSongs.compactMap { $0.localSong }, showArtwork: true, showTrackNumber: false, audioManager: audioManager)
+                                }
+                            }
+                            .onMove { source, dest in
+                                library.moveSongsInPlaylist(playlistId: pl.id, from: source, to: dest)
+                            }
+                            .onDelete { offsets in
+                                library.deleteSongFromPlaylist(playlistId: pl.id, at: offsets)
+                            }
+                        }
+                    }
+                }
+                .listStyle(.grouped)
+            }
+        }
+        .navigationTitle(currentPlaylist?.title ?? "Playlist")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar { EditButton() }
+        .onChange(of: selectedPhoto) { newItem in
+            Task {
+                if let data = try? await newItem?.loadTransferable(type: Data.self) {
+                    DispatchQueue.main.async { library.updatePlaylistArtwork(id: playlist.id, data: data) }
+                }
+            }
         }
     }
 }
@@ -316,6 +473,12 @@ struct PortraitLayout: View {
                 }
                 .navigationDestination(for: StringWrapper.self) { wrapper in
                     ArtistDetailView(artist: wrapper.value, library: library, audioManager: audioManager)
+                }
+                .navigationDestination(for: AppPlaylist.self) { playlist in
+                    AppPlaylistDetailView(playlist: playlist)
+                }
+                .navigationDestination(for: UnifiedPlaylistItem.self) { item in
+                    UnifiedPlaylistDetailView(item: item, library: library, audioManager: audioManager)
                 }
         }
         .accentColor(.pink)
@@ -387,6 +550,7 @@ struct ExpandableDescriptionView: View {
     let text: String
     let albumTitle: String
     var backgroundColor: Color = Color(.systemBackground)
+    var textColor: Color = .primary // Defaults to primary if not provided
     
     @State private var showFull = false
     
@@ -402,9 +566,10 @@ struct ExpandableDescriptionView: View {
             }
         }) {
             ZStack(alignment: .bottomTrailing) {
+                // 1. Update the preview text color
                 Text(text)
                     .font(.subheadline)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(textColor.opacity(0.8)) // Slightly dimmed for the preview
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -420,7 +585,7 @@ struct ExpandableDescriptionView: View {
                         
                         Text("MORE")
                             .font(.caption.bold())
-                            .foregroundColor(.pink)
+                            .foregroundColor(textColor) // Match the text color rather than forced pink
                             .padding(.leading, 2)
                             .background(backgroundColor)
                     }
@@ -432,12 +597,18 @@ struct ExpandableDescriptionView: View {
         .disabled(!isLongText)
         .sheet(isPresented: $showFull) {
             NavigationView {
-                ScrollView {
-                    Text(text)
-                        .font(.body)
-                        .foregroundColor(.primary)
-                        .padding(24)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                ZStack {
+                    // 2. Set the background of the entire expanded sheet
+                    backgroundColor.ignoresSafeArea()
+                    
+                    ScrollView {
+                        // 3. Update the full text color
+                        Text(text)
+                            .font(.body)
+                            .foregroundColor(textColor)
+                            .padding(24)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
                 .navigationTitle(albumTitle)
                 .navigationBarTitleDisplayMode(.inline)
@@ -445,9 +616,13 @@ struct ExpandableDescriptionView: View {
                     ToolbarItem(placement: .navigationBarTrailing) {
                         Button("Done") { showFull = false }
                             .font(.headline)
-                            .foregroundColor(.pink)
+                            .foregroundColor(textColor) // Match the done button to the text color
                     }
                 }
+                // Ensure the navigation bar reflects the background color
+                .toolbarBackground(backgroundColor, for: .navigationBar)
+                .toolbarBackground(.visible, for: .navigationBar)
+                .toolbarColorScheme(textColor.luminance < 0.5 ? .light : .dark, for: .navigationBar)
             }
         }
     }
@@ -603,6 +778,7 @@ struct SongMenuContent: View {
     @ObservedObject var library: LibraryManager
     @ObservedObject var audioManager: AudioManager
     @Binding var showInfo: Bool
+    
     var body: some View {
         Section {
             Button(action: { audioManager.play(song: song) }) { HStack { Text(song.title ?? "Unknown").font(.headline).multilineTextAlignment(.leading).lineLimit(nil); Spacer(); if let artwork = song.artwork?.image(at: CGSize(width: 100, height: 100)) { Image(uiImage: artwork) } else { Image(systemName: "music.note") } } }
@@ -610,6 +786,9 @@ struct SongMenuContent: View {
         Section {
             Button { audioManager.play(song: song) } label: { Label("Play", systemImage: "play") }
             Button { library.toggleFavorite(song: song) } label: { Label(library.isSystemFavorite(song: song) ? "Unfavorite" : "Favorite", systemImage: library.isSystemFavorite(song: song) ? "star.fill" : "star") }
+            Button {
+                NotificationCenter.default.post(name: NSNotification.Name("ShowAddToPlaylist"), object: ["apple_\(song.persistentID)"])
+            } label: { Label("Add to Playlist...", systemImage: "text.badge.plus") }
             Button { showInfo = true } label: { Label("Song Info", systemImage: "info.circle") }
         }
     }
@@ -772,9 +951,27 @@ struct LibraryHomeView: View {
                                         .contextMenu {
                                             if let apple = item.appleAlbum {
                                                 Button { audioManager.play(song: apple.items.first!, queue: apple.items) } label: { Label("Play", systemImage: "play") }
+                                                Button {
+                                                    let ids: [String]
+                                                    if let apple = item.appleAlbum {
+                                                        ids = apple.items.map { "apple_\($0.persistentID)" }
+                                                    } else if let local = item.localWrapper {
+                                                        ids = local.songs.map { "local_\($0.id)" }
+                                                    } else { ids = [] }
+                                                    NotificationCenter.default.post(name: NSNotification.Name("ShowAddToPlaylist"), object: ids)
+                                                } label: { Label("Add to Playlist...", systemImage: "text.badge.plus") }
                                                 Button { library.togglePin(album: apple) } label: { Label(library.isPinned(album: apple) ? "Unpin" : "Pin to Library", systemImage: "pin") }
                                             } else if let local = item.localWrapper {
                                                 Button { audioManager.play(localSong: local.songs.first!, queue: local.songs) } label: { Label("Play", systemImage: "play") }
+                                                Button {
+                                                    let ids: [String]
+                                                    if let apple = item.appleAlbum {
+                                                        ids = apple.items.map { "apple_\($0.persistentID)" }
+                                                    } else if let local = item.localWrapper {
+                                                        ids = local.songs.map { "local_\($0.id)" }
+                                                    } else { ids = [] }
+                                                    NotificationCenter.default.post(name: NSNotification.Name("ShowAddToPlaylist"), object: ids)
+                                                } label: { Label("Add to Playlist...", systemImage: "text.badge.plus") }
                                                 Button { library.togglePin(localAlbumName: local.name) } label: { Label(library.isPinned(localAlbumName: local.name) ? "Unpin" : "Pin to Library", systemImage: "pin") }
                                                 Button(role: .destructive) { DownloadsManager.shared.deleteAlbum(albumName: local.name) } label: { Label("Delete", systemImage: "trash") }
                                             } else {
@@ -862,6 +1059,119 @@ struct GenreListView: View {
         }
         .navigationTitle("Genres")
         .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always))
+    }
+}
+
+struct UnifiedPlaylistDetailView: View {
+    let item: UnifiedPlaylistItem
+    @ObservedObject var library: LibraryManager
+    @ObservedObject var audioManager: AudioManager
+    @State private var selectedPhoto: PhotosPickerItem? = nil
+    
+    var customPlaylist: AppPlaylist? { library.customPlaylists.first { $0.id == item.id } }
+    
+    var unifiedSongs: [UnifiedSongItem] {
+        if let apple = item.applePlaylist {
+            return apple.items.map { UnifiedSongItem(id: "apple_\($0.persistentID)", title: $0.title ?? "", artist: $0.artist ?? "", sortTitle: "", appleSong: $0, localSong: nil) }
+        } else if let custom = customPlaylist {
+            return custom.songIDs.compactMap { idStr in
+                if idStr.hasPrefix("apple_"), let appleID = UInt64(idStr.dropFirst(6)), let song = library.songs.first(where: { $0.persistentID == appleID }) {
+                    return UnifiedSongItem(id: idStr, title: song.title ?? "", artist: song.artist ?? "", sortTitle: "", appleSong: song, localSong: nil)
+                } else if idStr.hasPrefix("local_"), let song = DownloadsManager.shared.downloadedSongs.first(where: { $0.id == String(idStr.dropFirst(6)) }) {
+                    return UnifiedSongItem(id: idStr, title: song.title, artist: song.artist, sortTitle: "", appleSong: nil, localSong: song)
+                }
+                return nil
+            }
+        }
+        return []
+    }
+    
+    var body: some View {
+        ZStack {
+            Color(.systemBackground).ignoresSafeArea()
+            
+            ScrollView {
+                VStack(spacing: 0) {
+                    // Header mimicking Album Detail View
+                    VStack(spacing: 16) {
+                        PhotosPicker(selection: $selectedPhoto, matching: .images) {
+                            if let custom = customPlaylist, let data = custom.artworkData, let uiImage = UIImage(data: data) {
+                                Image(uiImage: uiImage).resizable().aspectRatio(contentMode: .fill).frame(width: 250, height: 250).cornerRadius(12).shadow(radius: 10)
+                            } else {
+                                Rectangle().fill(Color.gray.opacity(0.3)).frame(width: 250, height: 250).cornerRadius(12)
+                                    .overlay(
+                                        VStack {
+                                            Image(systemName: item.customPlaylist != nil ? "photo.badge.plus" : "music.note.list").font(.largeTitle)
+                                            if item.customPlaylist != nil { Text("Add Cover").font(.caption).padding(.top, 4) }
+                                        }.foregroundColor(.gray)
+                                    )
+                            }
+                        }
+                        .disabled(item.customPlaylist == nil) // Only allow editing custom playlists
+                        
+                        VStack(spacing: 4) {
+                            Text(item.title).font(.title2).bold().multilineTextAlignment(.center)
+                            Text("Playlist").font(.title3).foregroundColor(.secondary)
+                            Text("\(unifiedSongs.count) Songs").font(.caption).foregroundColor(.gray).padding(.top, 2)
+                        }
+                        .padding(.horizontal, 20)
+                        
+                        HStack(spacing: 20) {
+                            Button(action: {
+                                if let first = unifiedSongs.first {
+                                    if let apple = first.appleSong { audioManager.play(song: apple, queue: unifiedSongs.compactMap { $0.appleSong }) }
+                                    else if let local = first.localSong { audioManager.play(localSong: local, queue: unifiedSongs.compactMap { $0.localSong }) }
+                                }
+                            }) {
+                                HStack { Image(systemName: "play.fill"); Text("Play") }.font(.headline).foregroundColor(.pink).frame(width: 160, height: 54).background(Color.gray.opacity(0.1)).clipShape(Capsule())
+                            }
+                            Button(action: {
+                                audioManager.isShuffled = true
+                                if let random = unifiedSongs.randomElement() {
+                                    if let apple = random.appleSong { audioManager.play(song: apple, queue: unifiedSongs.compactMap { $0.appleSong }) }
+                                    else if let local = random.localSong { audioManager.play(localSong: local, queue: unifiedSongs.compactMap { $0.localSong }) }
+                                }
+                            }) {
+                                HStack { Image(systemName: "shuffle"); Text("Shuffle") }.font(.headline).foregroundColor(.pink).frame(width: 160, height: 54).background(Color.gray.opacity(0.1)).clipShape(Capsule())
+                            }
+                        }.padding(.top, 8)
+                    }
+                    .padding(.top, 20)
+                    .padding(.bottom, 20)
+                    
+                    // Song List
+                    if unifiedSongs.isEmpty {
+                        Text("No songs added yet. Long press a song to add it here.")
+                            .foregroundColor(.secondary)
+                            .padding(.top, 40)
+                    } else {
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            ForEach(Array(unifiedSongs.enumerated()), id: \.element.id) { index, songItem in
+                                if let apple = songItem.appleSong {
+                                    SongRow(song: apple, audioManager: audioManager, library: library, showArtwork: true, showTrackNumber: false)
+                                        .onTapGesture { audioManager.play(song: apple, queue: unifiedSongs.compactMap { $0.appleSong }) }
+                                } else if let local = songItem.localSong {
+                                    DownloadsSongRow(song: local, queue: unifiedSongs.compactMap { $0.localSong }, showArtwork: true, showTrackNumber: false, audioManager: audioManager)
+                                }
+                                Divider().padding(.leading)
+                            }
+                        }
+                    }
+                    Spacer().frame(height: 100)
+                }
+            }
+        }
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if item.customPlaylist != nil { EditButton() }
+        }
+        .onChange(of: selectedPhoto) { newItem in
+            Task {
+                if let data = try? await newItem?.loadTransferable(type: Data.self) {
+                    DispatchQueue.main.async { library.updatePlaylistArtwork(id: item.id, data: data) }
+                }
+            }
+        }
     }
 }
 
@@ -995,23 +1305,53 @@ struct PlaylistListView: View {
     @Binding var isSearching: Bool
     @Binding var showSettings: Bool
     @State private var searchText = ""
+    @State private var showNewPlaylistAlert = false
+    @State private var newPlaylistTitle = ""
     
-    var filteredSystemPlaylists: [MPMediaItemCollection] {
-        if searchText.isEmpty { return library.playlists }
-        return library.smartFilterPlaylists(in: library.playlists, for: searchText)
+    var unifiedPlaylists: [UnifiedPlaylistItem] {
+        var items: [UnifiedPlaylistItem] = []
+        
+        // Add Apple Playlists
+        items.append(contentsOf: library.playlists.map {
+            UnifiedPlaylistItem(id: "apple_\($0.persistentID)", title: $0.value(forProperty: MPMediaPlaylistPropertyName) as? String ?? "Untitled", applePlaylist: $0, customPlaylist: nil)
+        })
+        
+        // Add Custom Playlists
+        items.append(contentsOf: library.customPlaylists.map {
+            UnifiedPlaylistItem(id: $0.id, title: $0.title, applePlaylist: nil, customPlaylist: $0)
+        })
+        
+        // Filter and Sort
+        var sorted = items.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+        if !searchText.isEmpty {
+            sorted = sorted.filter { $0.title.localizedCaseInsensitiveContains(searchText) }
+        }
+        return sorted
     }
     
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                if filteredSystemPlaylists.isEmpty { Text("No playlists found.").foregroundColor(.gray).padding() } else {
-                    ForEach(filteredSystemPlaylists, id: \.persistentID) { playlist in
-                        NavigationLink(value: playlist) {
+                if unifiedPlaylists.isEmpty {
+                    Text("No playlists found.").foregroundColor(.gray).padding()
+                } else {
+                    ForEach(unifiedPlaylists) { item in
+                        NavigationLink(value: item) {
                             HStack(spacing: 16) {
-                                Image(systemName: "music.note.list").font(.title2).frame(width: 40, height: 40).background(Color.pink.opacity(0.1)).foregroundColor(.pink).cornerRadius(8)
+                                // Artwork
+                                if let custom = item.customPlaylist, let data = custom.artworkData, let uiImage = UIImage(data: data) {
+                                    Image(uiImage: uiImage).resizable().frame(width: 40, height: 40).cornerRadius(8)
+                                } else {
+                                    Image(systemName: "music.note.list").font(.title2).frame(width: 40, height: 40).background(Color.pink.opacity(0.1)).foregroundColor(.pink).cornerRadius(8)
+                                }
+                                
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(playlist.value(forProperty: MPMediaPlaylistPropertyName) as? String ?? "Untitled").font(.body).foregroundColor(.primary)
-                                    Text(collectionStats(collection: playlist)).font(.caption).foregroundColor(.secondary)
+                                    Text(item.title).font(.body).foregroundColor(.primary)
+                                    if let apple = item.applePlaylist {
+                                        Text(collectionStats(collection: apple)).font(.caption).foregroundColor(.secondary)
+                                    } else if let custom = item.customPlaylist {
+                                        Text("\(custom.songIDs.count) Songs").font(.caption).foregroundColor(.secondary)
+                                    }
                                 }
                                 Spacer()
                                 Image(systemName: "chevron.right").font(.caption).foregroundColor(.gray.opacity(0.5))
@@ -1023,7 +1363,24 @@ struct PlaylistListView: View {
                 Spacer().frame(height: 100)
             }
         }
-        .background(Color(.systemBackground)).navigationTitle("Playlists").searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always))
+        .background(Color(.systemBackground))
+        .navigationTitle("Playlists")
+        .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always))
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button(action: { showNewPlaylistAlert = true }) { Image(systemName: "plus") }
+            }
+        }
+        .alert("New Playlist", isPresented: $showNewPlaylistAlert) {
+            TextField("Playlist Name", text: $newPlaylistTitle)
+            Button("Cancel", role: .cancel) { newPlaylistTitle = "" }
+            Button("Create") {
+                if !newPlaylistTitle.isEmpty {
+                    library.createPlaylist(title: newPlaylistTitle)
+                    newPlaylistTitle = ""
+                }
+            }
+        }
     }
 }
 
@@ -1340,6 +1697,15 @@ struct AlbumListView: View {
                                     } else if let local = item.localWrapper {
                                         let validSongs = local.songs.filter { $0.duration > 0 }
                                         if !validSongs.isEmpty { Button { audioManager.play(localSong: validSongs.first!, queue: validSongs) } label: { Label("Play", systemImage: "play") } }
+                                        Button {
+                                            let ids: [String]
+                                            if let apple = item.appleAlbum {
+                                                ids = apple.items.map { "apple_\($0.persistentID)" }
+                                            } else if let local = item.localWrapper {
+                                                ids = local.songs.map { "local_\($0.id)" }
+                                            } else { ids = [] }
+                                            NotificationCenter.default.post(name: NSNotification.Name("ShowAddToPlaylist"), object: ids)
+                                        } label: { Label("Add to Playlist...", systemImage: "text.badge.plus") }
                                         Button { library.togglePin(localAlbumName: local.name) } label: { Label(library.isPinned(localAlbumName: local.name) ? "Unpin" : "Pin to Library", systemImage: "pin") }
                                         Button(role: .destructive) { DownloadsManager.shared.deleteAlbum(albumName: local.name) } label: { Label("Delete", systemImage: "trash") }
                                     }
@@ -1456,12 +1822,12 @@ struct AlbumDetailView: View {
     
     var albumTextColor: Color {
         if let hex = library.albumTextColorPrefs[albumID] { return Color(hex: hex) }
-        return customBgColor != nil ? .white : .primary
+        return customBgColor?.adaptivePrimary ?? .primary
     }
 
     var songTextColor: Color {
         if let hex = library.songTextColorPrefs[albumID] { return Color(hex: hex) }
-        return customBgColor != nil ? .white.opacity(0.8) : .primary
+        return customBgColor?.adaptiveSecondary ?? .primary
     }
     
     var dividerColor: Color {
@@ -1635,10 +2001,12 @@ struct AlbumDetailView: View {
                                 
                                 if let desc = library.customAlbumDescriptions[albumID], !desc.isEmpty {
                                     let currentBgColor = library.customAlbumColors[albumID] != nil ? Color(hex: library.customAlbumColors[albumID]!) : Color(.systemBackground)
+                                    
                                     ExpandableDescriptionView(
                                         text: desc,
                                         albumTitle: album.representativeItem?.albumTitle ?? "Album",
-                                        backgroundColor: currentBgColor
+                                        backgroundColor: currentBgColor,
+                                        textColor: songTextColor // <-- Pass the adaptive color
                                     )
                                     .padding(.horizontal, 24)
                                     .padding(.top, 12)
@@ -1647,7 +2015,13 @@ struct AlbumDetailView: View {
                             }
                         } else {
                             VStack(spacing: 16) {
-                                if let artwork = album.representativeItem?.artwork?.image(at: CGSize(width: 300, height: 300)) {
+                                // Add the video check here for the standard layout
+                                if let videoURL = library.albumVideoArt[albumID] {
+                                    AnimatedVideoArtView(videoURL: videoURL, crop: library.albumArtCrops[albumID])
+                                        .frame(width: 250, height: 250)
+                                        .cornerRadius(12)
+                                        .shadow(radius: 10)
+                                } else if let artwork = album.representativeItem?.artwork?.image(at: CGSize(width: 300, height: 300)) {
                                     Image(uiImage: artwork).resizable().aspectRatio(contentMode: .fit).frame(width: 250, height: 250).cornerRadius(12).shadow(radius: 10)
                                 } else {
                                     Rectangle().fill(Color.gray.opacity(0.3)).frame(width: 250, height: 250).cornerRadius(12)
@@ -2394,6 +2768,28 @@ struct AlbumSettingsSheet: View {
                             library.setSongTextColor(id: albumID, hex: newValue.toHex())
                         }
                     
+                    // NEW: Restore Button
+                    Button(action: {
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                        
+                        // Clear the overrides
+                        library.setAlbumTextColor(id: albumID, hex: nil)
+                        library.setSongTextColor(id: albumID, hex: nil)
+                        
+                        // Update the local state so the UI ColorPickers reset immediately
+                        if let hex = library.customAlbumColors[albumID] {
+                            let bgColor = Color(hex: hex)
+                            albumTextColor = bgColor.adaptivePrimary
+                            songTextColor = bgColor.adaptiveSecondary
+                        } else {
+                            albumTextColor = .primary
+                            songTextColor = .primary
+                        }
+                    }) {
+                        Text("Restore Smart Text Coloring")
+                            .foregroundColor(.pink)
+                    }
+                    
                     Button { showColorEditor = true } label: {
                         Label("Set Background Color", systemImage: "paintpalette")
                             .foregroundColor(.primary)
@@ -3059,6 +3455,7 @@ struct SettingsView: View {
     @ObservedObject var settings: AppSettings
     @Environment(\.dismiss) var dismiss
     private var decimalFormatter: NumberFormatter { let f = NumberFormatter(); f.numberStyle = .decimal; return f }
+    @AppStorage("useSmartTextColoring") private var useSmartTextColoring: Bool = true
     
     var body: some View {
         NavigationView {
@@ -3076,6 +3473,18 @@ struct SettingsView: View {
                     Toggle("Show Mac Tab", isOn: $settings.showMacTab);
                     Toggle("Show Song Artwork", isOn: $settings.showListArtwork);
                     Picker("Lyric Highlight Color", selection: $settings.lyricColorName) { ForEach(AppSettings.LyricColorName.allCases) { color in Text(color.rawValue).tag(color) } }
+                    Toggle("Smart Text Coloring", isOn: $useSmartTextColoring)
+                        // Only show the restore button if the user has changed the default setting
+                        if !useSmartTextColoring {
+                            Button(action: {
+                                withAnimation {
+                                    useSmartTextColoring = true
+                                }
+                            }) {
+                                Text("Restore Smart Text Coloring")
+                                    .foregroundColor(.accentColor)
+                            }
+                        }
                 }
                 
                 Section(header: Text("Playback Timing"), footer: Text("Automatically skip long intros or fade-outs.")) {
@@ -3885,6 +4294,34 @@ extension Color {
     // Faint blend for Dividers
     var adaptiveDivider: Color {
         return isDark ? .white.opacity(0.15) : .black.opacity(0.15)
+    }
+}
+
+#if canImport(UIKit)
+import UIKit
+typealias PlatformColor = UIColor
+#elseif canImport(AppKit)
+import AppKit
+typealias PlatformColor = NSColor
+#endif
+
+extension Color {
+    /// Returns black or white text color depending on the luminance of the background color.
+    func smartTextColor() -> Color {
+        let platformColor = PlatformColor(self)
+        var red: CGFloat = 0
+        var green: CGFloat = 0
+        var blue: CGFloat = 0
+        var alpha: CGFloat = 0
+        
+        // Extract RGB values
+        platformColor.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+        
+        // Calculate relative luminance
+        let luminance = 0.299 * red + 0.587 * green + 0.114 * blue
+        
+        // If the background is light, use black text. Otherwise, use white text.
+        return luminance > 0.5 ? .black : .white
     }
 }
 

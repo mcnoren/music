@@ -1,4 +1,3 @@
-
 import AVKit
 import SwiftUI
 
@@ -18,6 +17,9 @@ struct AnimatedVideoArtView: UIViewRepresentable {
 class VideoPlayerView: UIView {
     private var playerLayer = AVPlayerLayer()
     private var looper: AVPlayerLooper?
+    private var currentPlayer: AVQueuePlayer?
+    private var statusObserver: NSKeyValueObservation?
+    
     private var currentURL: URL?
     private var currentCrop: AlbumArtCrop?
     
@@ -35,13 +37,21 @@ class VideoPlayerView: UIView {
     private func setupPlayer(url: URL) {
         currentURL = url
         
-        // Stop current playback
-        playerLayer.player?.pause()
+        // 1. Clean up previous player and observers
+        currentPlayer?.pause()
+        statusObserver?.invalidate()
         looper = nil
         
+        // 2. Standard Setup
         let item = AVPlayerItem(url: url)
         let player = AVQueuePlayer(playerItem: item)
+        
+        // Ensure it doesn't fight for audio or screen sleep
         player.isMuted = true
+        player.preventsDisplaySleepDuringVideoPlayback = false
+        if #available(iOS 15.0, *) {
+            player.audiovisualBackgroundPlaybackPolicy = .continuesIfPossible
+        }
         
         looper = AVPlayerLooper(player: player, templateItem: item)
         
@@ -50,7 +60,20 @@ class VideoPlayerView: UIView {
         if playerLayer.superlayer == nil {
             layer.addSublayer(playerLayer)
         }
+        
+        self.currentPlayer = player
         player.play()
+        
+        // 3. THE FIX: Actively fight the system's auto-pause behavior
+        statusObserver = player.observe(\.timeControlStatus, options: [.new]) { [weak self] observedPlayer, _ in
+            guard let self = self else { return }
+            
+            // If iOS pauses the player (e.g., due to PiP or another audio session taking over)
+            if observedPlayer.timeControlStatus == .paused {
+                // Immediately force it back to playing
+                observedPlayer.play()
+            }
+        }
     }
     
     func update(url: URL, crop: AlbumArtCrop?) {
@@ -74,8 +97,6 @@ class VideoPlayerView: UIView {
             let widthFactor = crop.trailing - crop.leading
             let heightFactor = crop.bottom - crop.top
             
-            // We want the cropped area to fill the current bounds.
-            // So the total size of the playerLayer should be larger.
             let fullWidth = bounds.width / widthFactor
             let fullHeight = bounds.height / heightFactor
             
@@ -88,5 +109,9 @@ class VideoPlayerView: UIView {
         } else {
             playerLayer.frame = bounds
         }
+    }
+    
+    deinit {
+        statusObserver?.invalidate()
     }
 }

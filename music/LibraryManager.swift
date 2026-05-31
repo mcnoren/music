@@ -251,11 +251,20 @@ class LibraryManager: ObservableObject {
                 }
             }
         }
+        
+        // Load Custom Playlists
+        if let data = UserDefaults.standard.data(forKey: customPlaylistsKey),
+           let decoded = try? JSONDecoder().decode([AppPlaylist].self, from: data) {
+            self.customPlaylists = decoded
+        }
     }
     
     // MARK: - Album Colors Storage
     @Published var customAlbumColors: [String: String] = [:]
     private let albumColorsKey = "AlbumColorsPersistenceKey"
+    
+    @Published var customPlaylists: [AppPlaylist] = []
+    private let customPlaylistsKey = "CustomPlaylistsPersistenceKey"
     
     func loadAlbumColors() {
         if let data = UserDefaults.standard.data(forKey: albumColorsKey),
@@ -494,6 +503,51 @@ class LibraryManager: ObservableObject {
         }
         
         return nil
+    }
+    
+    // MARK: - Custom Playlists Logic
+    func saveCustomPlaylists() {
+        if let encoded = try? JSONEncoder().encode(customPlaylists) {
+            UserDefaults.standard.set(encoded, forKey: customPlaylistsKey)
+        }
+    }
+
+    func createPlaylist(title: String) {
+        let newPlaylist = AppPlaylist(id: UUID().uuidString, title: title, songIDs: [])
+        customPlaylists.append(newPlaylist)
+        saveCustomPlaylists()
+    }
+
+    func updatePlaylistArtwork(id: String, data: Data?) {
+        if let index = customPlaylists.firstIndex(where: { $0.id == id }) {
+            customPlaylists[index].artworkData = data
+            saveCustomPlaylists()
+        }
+    }
+
+    func addSongsToPlaylist(songIDs: [String], playlistId: String) {
+        if let index = customPlaylists.firstIndex(where: { $0.id == playlistId }) {
+            for songId in songIDs {
+                if !customPlaylists[index].songIDs.contains(songId) {
+                    customPlaylists[index].songIDs.append(songId)
+                }
+            }
+            saveCustomPlaylists()
+        }
+    }
+
+    func moveSongsInPlaylist(playlistId: String, from source: IndexSet, to destination: Int) {
+        if let index = customPlaylists.firstIndex(where: { $0.id == playlistId }) {
+            customPlaylists[index].songIDs.move(fromOffsets: source, toOffset: destination)
+            saveCustomPlaylists()
+        }
+    }
+
+    func deleteSongFromPlaylist(playlistId: String, at offsets: IndexSet) {
+        if let index = customPlaylists.firstIndex(where: { $0.id == playlistId }) {
+            customPlaylists[index].songIDs.remove(atOffsets: offsets)
+            saveCustomPlaylists()
+        }
     }
     
     func merge(remoteLyrics: [String: SyncedLyricsDocument]) {

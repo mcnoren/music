@@ -31,30 +31,34 @@ struct FullPlayerView: View {
     let playbackSpeeds: [Float] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
     let artworkHeightRatio: CGFloat = 0.38
     
-    // Helper to determine if ANY song is playing
     var hasActiveSong: Bool {
         audioManager.currentSong != nil ||
         audioManager.currentLocalSong != nil ||
-        audioManager.currentRemoteDTO != nil // <--- ADD THIS
+        audioManager.currentRemoteDTO != nil
     }
     
-    // Safely grab the current song's ID (works for both Apple Music, Local files, and Streams)
     var currentSongId: String {
-        if let remote = audioManager.currentRemoteDTO { return remote.id } // <--- ADD THIS
+        if let remote = audioManager.currentRemoteDTO { return remote.id }
         if let local = audioManager.currentLocalSong { return local.id }
         if let song = audioManager.currentSong { return String(song.persistentID) }
         return ""
     }
     
-    // Safely grab the original metadata lyrics
+    // Safely grab the current album's ID for video art lookup
+    var currentAlbumId: String {
+        if let remote = audioManager.currentRemoteDTO { return remote.album }
+        if let local = audioManager.currentLocalSong { return local.album }
+        if let song = audioManager.currentSong { return String(song.albumPersistentID) }
+        return ""
+    }
+    
     var currentOriginalLyrics: String? {
-        if let remote = audioManager.currentRemoteDTO { return nil } // <--- ADD THIS
+        if let remote = audioManager.currentRemoteDTO { return nil }
         if let local = audioManager.currentLocalSong { return local.lyrics }
         if let song = audioManager.currentSong { return song.lyrics }
         return nil
     }
     
-    // The magic: Check the live library for user edits first, fallback to original metadata
     var activeRawLyrics: String? {
         if let custom = library.customRawLyrics[currentSongId], !custom.isEmpty {
             return custom
@@ -62,14 +66,13 @@ struct FullPlayerView: View {
         return currentOriginalLyrics
     }
     
-    // ADD THIS: Safely calculates duration, falling back to known metadata if the stream is calculating
     var safeDuration: TimeInterval {
         let d = audioManager.duration
         if d.isNaN || d.isInfinite || d <= 0 {
             if let remote = audioManager.currentRemoteDTO, remote.duration > 0 { return remote.duration }
             if let local = audioManager.currentLocalSong, local.duration > 0 { return local.duration }
             if let apple = audioManager.currentSong { return apple.playbackDuration }
-            return 1.0 // Absolute fallback
+            return 1.0
         }
         return d
     }
@@ -109,37 +112,48 @@ struct FullPlayerView: View {
                                     library: library,
                                     uiState: uiState,
                                     settings: settings,
-                                    showRawLyricsEditor: $showRawLyricsEditor, // Swapped to be first
-                                    showSyncSheet: $showSyncSheet,             // Swapped to be second
+                                    showRawLyricsEditor: $showRawLyricsEditor,
+                                    showSyncSheet: $showSyncSheet,
                                     showFullScreenButton: true,
                                     dragOffset: $dragOffset
                                 )
                                 .transition(.asymmetric(insertion: .opacity.combined(with: .scale(scale: 0.95)), removal: .opacity.combined(with: .scale(scale: 0.95))))
                             } else {
-                                // Unified Front Artwork
-                                Group {
-                                    if let artwork = audioManager.displayArtwork(size: CGSize(width: 500, height: 500)) {
-                                        Image(uiImage: artwork).resizable().aspectRatio(contentMode: .fit)
-                                            .cornerRadius(16)
-                                            .shadow(color: .black.opacity(0.4), radius: 20, y: 10)
-                                    } else {
-                                        Rectangle().fill(Color.gray.opacity(0.3)).aspectRatio(1.0, contentMode: .fit).cornerRadius(16)
-                                            .overlay(Image(systemName: "music.note").font(.system(size: 80)).foregroundColor(.white.opacity(0.5)))
+                                // MARK: - Unified Front Artwork (Fixed Frame Collapsing)
+                                Color.clear
+                                    .aspectRatio(1.0, contentMode: .fit) // Forces the structural box to be a perfect square
+                                    .overlay(
+                                        ZStack { // ZStack ensures the inner video/image fills the clear box
+                                            if let videoURL = library.albumVideoArt[currentAlbumId] {
+                                                AnimatedVideoArtView(videoURL: videoURL, crop: library.albumArtCrops[currentAlbumId])
+                                            } else if let artwork = audioManager.displayArtwork(size: CGSize(width: 500, height: 500)) {
+                                                Image(uiImage: artwork)
+                                                    .resizable()
+                                                    .aspectRatio(contentMode: .fill)
+                                            } else {
+                                                ZStack {
+                                                    Rectangle().fill(Color.gray.opacity(0.3))
+                                                    Image(systemName: "music.note")
+                                                        .font(.system(size: 80))
+                                                        .foregroundColor(.white.opacity(0.5))
+                                                }
+                                            }
+                                        }
+                                    )
+                                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                                    .shadow(color: .black.opacity(0.4), radius: 20, y: 10)
+                                    .frame(height: geometry.size.height * artworkHeightRatio)
+                                    .padding(.horizontal, 40)
+                                    .onTapGesture {
+                                        dismiss()
+                                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                                            NotificationCenter.default.post(
+                                                name: NSNotification.Name("NavigateToAlbum"),
+                                                object: currentSongId
+                                            )
+                                        }
                                     }
-                                }
-                                .frame(height: geometry.size.height * artworkHeightRatio)
-                                .padding(.horizontal, 40)
-                                .onTapGesture {
-                                    // Dismiss player and notify the parent view to route to the album page
-                                    dismiss()
-                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                                        NotificationCenter.default.post(
-                                            name: NSNotification.Name("NavigateToAlbum"),
-                                            object: currentSongId // Passes the active song ID to help locate the Album
-                                        )
-                                    }
-                                }
-                                .transition(.asymmetric(insertion: .opacity.combined(with: .scale(scale: 0.95)), removal: .opacity.combined(with: .scale(scale: 0.95))))
+                                    .transition(.asymmetric(insertion: .opacity.combined(with: .scale(scale: 0.95)), removal: .opacity.combined(with: .scale(scale: 0.95))))
                             }
                         } else {
                             Rectangle().fill(Color.gray.opacity(0.3)).aspectRatio(1.0, contentMode: .fit).cornerRadius(16).frame(maxHeight: geometry.size.height * artworkHeightRatio).padding(.horizontal, 40)
@@ -151,7 +165,6 @@ struct FullPlayerView: View {
                     if !uiState.showLyrics { Spacer() }
                     
                     VStack(spacing: 0) {
-                        
                         // MARK: - Unified Titles
                         VStack(alignment: .center, spacing: 8) {
                             HStack(alignment: .center, spacing: 6) {
@@ -165,7 +178,7 @@ struct FullPlayerView: View {
                                             .foregroundColor(library.isSystemFavorite(song: song) ? .yellow : .white.opacity(0.6))
                                     }
                                 } else {
-                                    Image(systemName: "star").font(.title3).opacity(0) // Spacing preservation for local files
+                                    Image(systemName: "star").font(.title3).opacity(0)
                                 }
                                 
                                 MarqueeText(text: audioManager.displayTitle, font: .title2)
@@ -208,11 +221,9 @@ struct FullPlayerView: View {
                                 }
                             }
                             
-                            // Timestamps underneath the bar
                             HStack {
                                 Text(formatTime(audioManager.currentTime))
                                 Spacer()
-                                // Apple Music traditionally shows remaining time with a minus sign
                                 Text("-" + formatTime(max(0, audioManager.duration - audioManager.currentTime)))
                             }
                             .font(.caption2.monospacedDigit().weight(.semibold))
@@ -236,14 +247,10 @@ struct FullPlayerView: View {
                                     
                                     Button(action: {
                                         let multipeer = MultipeerManager.shared
-                                        
                                         if multipeer.connectionState != .connected {
-                                            // 1. Initiate connection if not connected
                                             let impact = UIImpactFeedbackGenerator(style: .medium)
                                             impact.impactOccurred()
                                             multipeer.startBrowsing()
-                                            
-                                            // Wait a moment for the connection to establish, then auto-cast
                                             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                                                 if multipeer.connectionState == .connected {
                                                     multipeer.isCastingToMac = true
@@ -251,7 +258,6 @@ struct FullPlayerView: View {
                                                 }
                                             }
                                         } else {
-                                            // 2. Standard toggle if already connected
                                             multipeer.isCastingToMac.toggle()
                                             if multipeer.isCastingToMac {
                                                 audioManager.forceSyncToMac()
@@ -262,7 +268,6 @@ struct FullPlayerView: View {
                                     }) {
                                         Image(systemName: "airplayvideo")
                                             .font(.title3)
-                                            // Ensure it only turns pink if it's ACTUALLY connected and casting
                                             .foregroundColor(MultipeerManager.shared.isCastingToMac && MultipeerManager.shared.connectionState == .connected ? .pink : .white.opacity(0.6))
                                             .frame(width: 40, height: 40)
                                     }
@@ -324,13 +329,9 @@ struct FullPlayerView: View {
         .sheet(isPresented: $showSongInfo) {
             songInfoSheetContent
         }
-        
-        // 1. UNIFIED LOCKING LOGIC: Lock the song exactly when ANY sheet opens
         .onChange(of: showSongInfo) { isShown in if isShown { lockCurrentSong() } }
         .onChange(of: showRawLyricsEditor) { isShown in if isShown { lockCurrentSong() } }
         .onChange(of: showSyncSheet) { isShown in if isShown { lockCurrentSong() } }
-        
-        // 2. USE THE LOCKED VARIABLES IN THE SHEETS
         .fullScreenCover(isPresented: $showRawLyricsEditor) {
             rawLyricsSheetContent
         }
@@ -343,18 +344,16 @@ struct FullPlayerView: View {
             Text("To view your lyrics and artwork on the TV, swipe down from the top right of your iPhone to open Control Center, then tap the Screen Mirroring icon.")
         }
         .onAppear {
-            // Sync the slider to the actual time immediately when the view opens
             self.sliderValue = audioManager.currentTime
         }
         .onChange(of: audioManager.currentTime) { newValue in
-            // Only update the visual slider if the user isn't actively holding it
             if !isDraggingSlider {
                 self.sliderValue = newValue
             }
         }
     }
     
-    // MARK: - Extracted Sheet Content (Fixes Compiler Timeout)
+    // MARK: - Extracted Sheet Content
     
     @ViewBuilder
     private var songInfoSheetContent: some View {
@@ -387,7 +386,6 @@ struct FullPlayerView: View {
         }
     }
     
-    // Helper function to lock the active state so the sheets don't crash when the song changes in the background
     private func lockCurrentSong() {
         lockedAppleSong = audioManager.currentSong
         lockedLocalSong = audioManager.currentLocalSong

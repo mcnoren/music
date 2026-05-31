@@ -113,7 +113,8 @@ class AudioManager: NSObject, ObservableObject {
     
     private func setupAudioSession() {
         do {
-            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
+            // Add options: [.mixWithOthers] here
+            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers])
             try AVAudioSession.sharedInstance().setActive(true)
         } catch {
             print("Failed to set audio session category. Error: \(error)")
@@ -130,7 +131,12 @@ class AudioManager: NSObject, ObservableObject {
     func play(localSong: LocalSong, queue: [LocalSong] = [], isStream: Bool = false) {
         if !isStream { self.currentRemoteDTO = nil; self.remoteQueue = [] }
         player.pause(); currentSong = nil
-        do { try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default); try AVAudioSession.sharedInstance().setActive(true) } catch { }
+        
+        // Add options: [.mixWithOthers] here as well
+        do {
+            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers])
+            try AVAudioSession.sharedInstance().setActive(true)
+        } catch { }
         
         self.localQueue = queue.isEmpty ? [localSong] : queue
         self.currentLocalSong = localSong

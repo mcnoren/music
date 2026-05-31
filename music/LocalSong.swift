@@ -611,9 +611,7 @@ struct DownloadsSongRow: View {
                 .frame(minHeight: 36, alignment: .center)
                 Spacer()
                 
-                Menu {
-                    Button(role: .destructive) { DownloadsManager.shared.deleteSong(song) } label: { Label("Delete", systemImage: "trash") }
-                } label: {
+                Menu { DownloadsSongMenuContent(song: song) } label: {
                     Image(systemName: "ellipsis").font(.title3).foregroundColor(.pink).frame(width: 30, height: 30).contentShape(Rectangle()) // Pink ellipsis
                 }
                 .highPriorityGesture(TapGesture())
@@ -628,9 +626,7 @@ struct DownloadsSongRow: View {
             impact.impactOccurred()
             audioManager.play(localSong: song, queue: queue.isEmpty ? [song] : queue)
         }
-        .contextMenu {
-            Button(role: .destructive) { DownloadsManager.shared.deleteSong(song) } label: { Label("Delete", systemImage: "trash") }
-        }
+        .contextMenu { DownloadsSongMenuContent(song: song) }
     }
     
     private func updateColor() {
@@ -638,6 +634,21 @@ struct DownloadsSongRow: View {
             dominantColor = img.dominantColor
         } else {
             dominantColor = .gray
+        }
+    }
+}
+
+struct DownloadsSongMenuContent: View {
+    let song: LocalSong
+    
+    var body: some View {
+        Section {
+            Button {
+                NotificationCenter.default.post(name: NSNotification.Name("ShowAddToPlaylist"), object: ["local_\(song.id)"])
+            } label: { Label("Add to Playlist...", systemImage: "text.badge.plus") }
+        }
+        Section {
+            Button(role: .destructive) { DownloadsManager.shared.deleteSong(song) } label: { Label("Delete", systemImage: "trash") }
         }
     }
 }
