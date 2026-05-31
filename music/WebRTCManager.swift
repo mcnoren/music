@@ -472,8 +472,15 @@ class WebRTCManager: NSObject, ObservableObject, AVAssetResourceLoaderDelegate {
             let parts = message.components(separatedBy: ":")
             if parts.count >= 3, let newOffset = Int(parts[2]) {
                 let songId = parts[1]
-                self.downloadedData[songId] = Data() // Clear out the old chunks
-                self.streamBaseOffsets[songId] = newOffset // Sync to the Mac's new position
+                
+                // 🚨 CRITICAL FIX: The Mac has confirmed the jump!
+                // NOW we can safely wipe the old chunks and sync the offset.
+                self.streamBaseOffsets[songId] = newOffset
+                self.downloadedData[songId] = Data()
+                self.clearSeekOffset(for: songId) // Mark the jump as complete
+                
+                // Instantly reprocess to feed the newly aligned data to AVPlayer
+                self.processPendingRequests()
             }
             #endif
             return true
@@ -570,7 +577,7 @@ class WebRTCManager: NSObject, ObservableObject, AVAssetResourceLoaderDelegate {
         let total = data.count
         let ext = url.pathExtension.lowercased()
         
-        // 1. PREVENT STALE CANCELS: Clear any lingering cancellations for this song before we start!
+        // PREVENT STALE CANCELS: Clear any lingering cancellations for this song before we start!
         self.cancelledStreams.remove(songId)
         
         sendString("START_STREAM:\(songId):\(total):\(ext)")
@@ -588,31 +595,28 @@ class WebRTCManager: NSObject, ObservableObject, AVAssetResourceLoaderDelegate {
                 }
                 
                 #if os(macOS)
-                // 2. DYNAMIC SEEKING: Jump to the end for M4A metadata if requested
+                // DYNAMIC SEEKING: Jump to the end for M4A metadata if requested
                 if let requestedSeek = self.getSeekOffset(for: songId) {
                     
-                    // 🚨 SAFELY clamp the offset so it never crashes the background thread!
+                    // SAFELY clamp the offset so it never crashes the background thread!
                     offset = min(max(Int(requestedSeek), 0), total)
                     self.clearSeekOffset(for: songId)
                     
-                    // Wait for the data channel to clear (only if open!), then sync the iPhone's sliding window
+                    // Flush the network buffer so old chunks finish sending BEFORE the marker
                     while let dc = self.dataChannel, dc.readyState == .open, dc.bufferedAmount > 0 { usleep(5000) }
-                    self.sendString("OFFSET_MARKER:\(songId):\(offset)")
                     
-                    // If the seek pushed us to the very end of the file, break the loop naturally
+                    self.sendString("OFFSET_MARKER:\(songId):\(offset)")
                     if offset >= total { break }
                 }
                 #endif
                 
-                // 3. BACKPRESSURE: Prevent "buffer bloat", but ensure the channel is actually open
+                // BACKPRESSURE: Prevent "buffer bloat" on cellular
                 while let dc = self.dataChannel, dc.readyState == .open, dc.bufferedAmount > 524288 {
                     usleep(10000)
                     if self.cancelledStreams.contains(songId) { break }
                 }
                 
                 let end = min(offset + chunkSize, total)
-                
-                // 🚨 EXTRA SAFETY: Ensure the range is mathematically valid before slicing
                 guard offset <= end, end <= total else { break }
                 
                 let chunk = data.subdata(in: offset..<end)
@@ -667,10 +671,8 @@ class WebRTCManager: NSObject, ObservableObject, AVAssetResourceLoaderDelegate {
 
     func processPendingRequests() {
         var requestsToComplete: [AVAssetResourceLoadingRequest] = []
-        var servedAnyData = false
 
-        // PASS 1: Try to serve data to any request that is currently within our buffer window.
-        // If we are actively serving data, we DO NOT want to trigger a seek and interrupt it.
+        // PASS 1: Try to feed AVPlayer with data we already have
         for request in pendingRequests {
             guard let dataRequest = request.dataRequest,
                   let url = request.request.url,
@@ -681,21 +683,14 @@ class WebRTCManager: NSObject, ObservableObject, AVAssetResourceLoaderDelegate {
 
             if request.contentInformationRequest != nil {
                 request.contentInformationRequest?.isByteRangeAccessSupported = true
-                
                 let fileName = fileNames[songId] ?? ""
                 let ext = (fileName as NSString).pathExtension.lowercased()
                 
-                if ext == "m4a" || ext == "m4p" {
-                    request.contentInformationRequest?.contentType = "com.apple.m4a-audio"
-                } else if ext == "mp4" {
-                    request.contentInformationRequest?.contentType = "public.mpeg-4-audio"
-                } else if ext == "wav" {
-                    request.contentInformationRequest?.contentType = "com.microsoft.waveform-audio"
-                } else if ext == "flac" {
-                    request.contentInformationRequest?.contentType = "org.xiph.flac"
-                } else {
-                    request.contentInformationRequest?.contentType = "public.mp3"
-                }
+                if ext == "m4a" || ext == "m4p" { request.contentInformationRequest?.contentType = "com.apple.m4a-audio" }
+                else if ext == "mp4" { request.contentInformationRequest?.contentType = "public.mpeg-4-audio" }
+                else if ext == "wav" { request.contentInformationRequest?.contentType = "com.microsoft.waveform-audio" }
+                else if ext == "flac" { request.contentInformationRequest?.contentType = "org.xiph.flac" }
+                else { request.contentInformationRequest?.contentType = "public.mp3" }
                 
                 request.contentInformationRequest?.contentLength = Int64(totalBytes)
             }
@@ -706,10 +701,8 @@ class WebRTCManager: NSObject, ObservableObject, AVAssetResourceLoaderDelegate {
             let unreadOffset = currentOffset - requestedOffset
             
             let baseOffset = self.streamBaseOffsets[songId] ?? 0
-            let bufferEnd = baseOffset + songData.count
             
-            // Check if the requested data falls inside our currently downloaded buffer
-            if currentOffset >= baseOffset && currentOffset <= bufferEnd {
+            if currentOffset >= baseOffset {
                 let localOffset = currentOffset - baseOffset
                 let availableLength = songData.count - localOffset
 
@@ -717,44 +710,51 @@ class WebRTCManager: NSObject, ObservableObject, AVAssetResourceLoaderDelegate {
                     let lengthToRespond = min(availableLength, requestedLength - unreadOffset)
                     let chunk = songData.subdata(in: localOffset..<(localOffset + lengthToRespond))
                     dataRequest.respond(with: chunk)
-                    
-                    servedAnyData = true // We successfully fed AVPlayer!
 
                     if dataRequest.currentOffset >= requestedOffset + requestedLength {
                         request.finishLoading()
                         requestsToComplete.append(request)
                     }
                 } else if songData.count >= totalBytes && totalBytes > 0 {
-                    // Failsafe for AVPlayer requesting EOF
                     request.finishLoading()
                     requestsToComplete.append(request)
                 }
             }
         }
 
-        // Clean up requests that successfully finished
         for completed in requestsToComplete {
             if let index = pendingRequests.firstIndex(of: completed) { pendingRequests.remove(at: index) }
         }
 
-        // PASS 2: If we couldn't serve ANY data, AVPlayer is starved and needs us to jump.
-        // We only look at the MOST RECENT request (last in the array) to prevent ping-ponging.
-        if !servedAnyData, let mostUrgentRequest = pendingRequests.last {
-            guard let dataRequest = mostUrgentRequest.dataRequest,
-                  let url = mostUrgentRequest.request.url,
-                  let songId = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "id" })?.value else { return }
+        // PASS 2: Determine if we need to tell the Mac to seek
+        let groupedRequests = Dictionary(grouping: pendingRequests) { request -> String? in
+            guard let url = request.request.url else { return nil }
+            return URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "id" })?.value
+        }
+
+        for (optionalSongId, requestsForSong) in groupedRequests {
+            guard let songId = optionalSongId else { continue }
             
-            let currentOffset = Int(dataRequest.currentOffset)
             let baseOffset = self.streamBaseOffsets[songId] ?? 0
             let bufferEnd = baseOffset + (self.downloadedData[songId]?.count ?? 0)
-
-            // Only issue a seek command if it is truly out of bounds
-            if currentOffset < baseOffset || currentOffset > bufferEnd + 262144 {
-                self.sendString("SEEK_STREAM:\(songId):\(currentOffset)")
+            
+            // We ONLY care about the earliest byte AVPlayer is actively waiting for.
+            let minRequestedOffset = requestsForSong.compactMap { Int($0.dataRequest?.currentOffset ?? 0) }.min() ?? 0
+            
+            // If the requested byte is far outside our buffer, we must jump.
+            // (1MB forward tolerance to prevent skipping over large album artwork in ID3 tags)
+            if minRequestedOffset < baseOffset || minRequestedOffset > bufferEnd + 1048576 {
                 
-                // Pause serving until the Mac's OFFSET_MARKER text arrives
-                self.streamBaseOffsets[songId] = currentOffset
-                self.downloadedData[songId] = Data()
+                // If we are ALREADY waiting for the Mac to jump to this offset, don't spam it
+                if let activeSeek = self.getSeekOffset(for: songId), Int(activeSeek) == minRequestedOffset {
+                    continue
+                }
+                
+                self.setSeekOffset(Double(minRequestedOffset), for: songId)
+                self.sendString("SEEK_STREAM:\(songId):\(minRequestedOffset)")
+                
+                // 🚨 CRITICAL FIX: Do NOT clear the local buffer or change baseOffset here!
+                // Wait for the Mac to send OFFSET_MARKER so we know old chunks aren't flying through the air.
             }
         }
     }
