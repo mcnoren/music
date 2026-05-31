@@ -188,7 +188,6 @@ struct ContentView: View {
     @StateObject var webrtc = WebRTCManager.shared
     
     @State private var showSearchSheet = false
-    @State private var songIdToPlaylist: StringIdentifiable? = nil
     @State private var songIDsToPlaylist: SongIDsWrapper? = nil
     
     var body: some View {
@@ -237,14 +236,6 @@ struct ContentView: View {
                         GlobalSearchView(library: library, audioManager: audioManager, showSearchSheet: $showSearchSheet, navState: navState)
                             .navigationBarItems(trailing: Button("Done") { showSearchSheet = false })
                     }
-                }
-                .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("ShowAddToPlaylist"))) { notif in
-                    if let id = notif.object as? String {
-                        songIdToPlaylist = StringIdentifiable(value: id)
-                    }
-                }
-                .sheet(item: $songIdToPlaylist) { item in
-                    AddToPlaylistSheet(songId: item.value)
                 }
                 .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("ShowAddToPlaylist"))) { notif in
                     if let ids = notif.object as? [String] {
