@@ -632,6 +632,16 @@ extension MultipeerManager: MCSessionDelegate, MCNearbyServiceAdvertiserDelegate
                 // 👉 Wrap the iOS-only save function
                 #if os(iOS)
                 LibraryManager.shared.saveCachedRemoteMetadata(libraryPayload.masterLibrary)
+                
+                // 👉 ADDED FIX: Request missing artwork for all cached remote albums
+                let grouped = Dictionary(grouping: libraryPayload.masterLibrary, by: { $0.album })
+                for (albumName, songs) in grouped {
+                    if LibraryManager.shared.getCachedRemoteArtwork(albumName: albumName) == nil {
+                        if let firstSong = songs.first {
+                            self.sendCommand("REQUEST_ARTWORK:\(firstSong.id)")
+                        }
+                    }
+                }
                 #endif
                 
                 if let url = libraryPayload.streamServerURL {

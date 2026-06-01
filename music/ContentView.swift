@@ -1295,6 +1295,8 @@ struct UnifiedGenreDetailView: View {
                     Section(header: Text("Mac Library").font(.headline).foregroundColor(.pink).padding(.horizontal).padding(.vertical, 8).frame(maxWidth: .infinity, alignment: .leading).background(Color(.systemGroupedBackground))) {
                         ForEach(remoteSongs) { song in
                             CachedRemoteSongRow(song: song, audioManager: audioManager, library: library)
+                                .opacity(MultipeerManager.shared.connectionState != .connected ? 0.4 : 1.0)
+                                .disabled(MultipeerManager.shared.connectionState != .connected)
                             Divider().padding(.leading)
                         }
                     }
@@ -1572,7 +1574,7 @@ struct ArtistListView: View {
                                             .frame(maxWidth: .infinity, alignment: .leading)
                                             .contentShape(Rectangle())
                                     }
-                                    .disabled(item.remoteWrapper != nil && MultipeerManager.shared.connectionState != .connected)
+                                    // REMOVED THE .disabled() MODIFIER FROM HERE
                                     Divider().padding(.leading)
                                 }
                             }
@@ -1657,6 +1659,20 @@ struct UnifiedArtistDetailView: View {
                         Section(header: Text("Downloads").font(.headline).foregroundColor(.pink).padding(.horizontal).padding(.vertical, 8).frame(maxWidth: .infinity, alignment: .leading).background(Color(.systemGroupedBackground))) {
                             ForEach(localSongs) { song in
                                 DownloadsSongRow(song: song, queue: localSongs, showArtwork: true, audioManager: audioManager)
+                                Divider().padding(.leading)
+                            }
+                        }
+                    }
+                }
+                
+                if let remoteWrap = item.remoteWrapper {
+                    let remoteSongs = remoteWrap.songs
+                    if !remoteSongs.isEmpty {
+                        Section(header: Text("Mac Library").font(.headline).foregroundColor(.pink).padding(.horizontal).padding(.vertical, 8).frame(maxWidth: .infinity, alignment: .leading).background(Color(.systemGroupedBackground))) {
+                            ForEach(remoteSongs) { song in
+                                CachedRemoteSongRow(song: song, audioManager: audioManager, library: library)
+                                    .opacity(MultipeerManager.shared.connectionState != .connected ? 0.4 : 1.0)
+                                    .disabled(MultipeerManager.shared.connectionState != .connected)
                                 Divider().padding(.leading)
                             }
                         }
@@ -1836,6 +1852,7 @@ struct AlbumListView: View {
                                             else if let remote = item.remoteWrapper { Text("\(remote.songs.count) Songs").font(.caption2).foregroundColor(.gray).lineLimit(1) }
                                         }
                                     }
+                                    .opacity((item.remoteWrapper != nil && MultipeerManager.shared.connectionState != .connected) ? 0.4 : 1.0)
                                 }
                                 // COMPLETELY REMOVED THE .disabled() BLOCK FROM HERE
                                 .contextMenu {
@@ -2381,6 +2398,8 @@ struct SongListView: View {
                                     } else if let remote = item.remoteSong {
                                         // Renders it greyed out automatically based on connection state
                                         CachedRemoteSongRow(song: remote, audioManager: audioManager, library: library)
+                                            .opacity(MultipeerManager.shared.connectionState != .connected ? 0.4 : 1.0)
+                                            .disabled(MultipeerManager.shared.connectionState != .connected)
                                     }
                                     Divider().padding(.leading)
                                 }
@@ -4448,10 +4467,13 @@ struct DynamicAlbumWrapper: View {
             AlbumDetailView(album: apple, audioManager: audioManager, library: library)
         } else if let local = item.localWrapper {
             UniversalAlbumDetailView(albumName: local.name, collection: .downloads(local.songs))
+        } else if let remote = item.remoteWrapper {
+            UniversalAlbumDetailView(albumName: remote.name, collection: .remote(remote.songs))
         } else {
             // 2. GHOST STATE: Actively scan the live library arrays to see if it finished loading in the background
             let appleID = item.id.hasPrefix("apple_") ? String(item.id.dropFirst(6)) : nil
             let localName = item.id.hasPrefix("local_") ? String(item.id.dropFirst(6)) : nil
+            let remoteName = item.id.hasPrefix("remote_") ? String(item.id.dropFirst(7)) : nil
             
             if let aID = appleID, let liveApple = library.albums.first(where: { String($0.persistentID) == aID }) {
                 AlbumDetailView(album: liveApple, audioManager: audioManager, library: library)
@@ -4459,6 +4481,10 @@ struct DynamicAlbumWrapper: View {
             } else if let lName = localName, !downloads.downloadedSongs.filter({ $0.album == lName }).isEmpty {
                 let liveSongs = downloads.downloadedSongs.filter({ $0.album == lName })
                 UniversalAlbumDetailView(albumName: lName, collection: .downloads(liveSongs))
+                
+            } else if let rName = remoteName, !library.cachedRemoteLibrary.filter({ $0.album == rName }).isEmpty {
+                let liveSongs = library.cachedRemoteLibrary.filter({ $0.album == rName })
+                UniversalAlbumDetailView(albumName: rName, collection: .remote(liveSongs))
                 
             } else {
                 // 3. Still waiting for Apple's media framework to finish querying...

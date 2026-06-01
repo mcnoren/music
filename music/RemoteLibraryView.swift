@@ -800,6 +800,13 @@ struct UniversalAlbumDetailView: View {
     var body: some View {
         let activeSongs = computedActiveSongs
         
+        let isDisconnectedRemote = {
+            if case .remote(_) = activeSongs {
+                return multipeer.connectionState != .connected
+            }
+            return false
+        }()
+        
         // NEW: Calculate if current song belongs to this specific album
         let isCurrentAlbum: Bool = {
             switch activeSongs {
@@ -965,7 +972,9 @@ struct UniversalAlbumDetailView: View {
                                             .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
                                     }
                                 }
-                                .offset(y: 30)
+                                .offset(y: 30) // Or .padding(.horizontal, 20) for the other layout
+                                .opacity(isDisconnectedRemote ? 0.4 : 1.0)
+                                .disabled(isDisconnectedRemote)
                             }
                             .padding(.bottom, 46)
 
@@ -1094,6 +1103,8 @@ struct UniversalAlbumDetailView: View {
                         }
                         .padding(.top, 20)
                         .padding(.bottom, 20)
+                        .opacity(isDisconnectedRemote ? 0.4 : 1.0)
+                        .disabled(isDisconnectedRemote)
                     }
 
                     LazyVStack(spacing: 0) {
@@ -1148,6 +1159,8 @@ struct UniversalAlbumDetailView: View {
                                     }
                                     ForEach(grouped[disc]!) { song in
                                         RemoteSongRow(song: song, queue: remoteQueue, multipeer: multipeer, showArtwork: false, showTrackNumber: true)
+                                            .opacity(isDisconnectedRemote ? 0.4 : 1.0)
+                                            .disabled(isDisconnectedRemote)
                                         Divider().padding(.leading)
                                     }
                                 }
