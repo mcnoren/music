@@ -591,11 +591,10 @@ extension MultipeerManager: MCSessionDelegate, MCNearbyServiceAdvertiserDelegate
         else if let libraryPayload = try? JSONDecoder().decode(LibrarySyncPayload.self, from: data) {
             DispatchQueue.main.async {
                 self.remoteLibrary = libraryPayload.masterLibrary
-                // Add the server URL extraction here!
-                if let url = libraryPayload.streamServerURL {
-                    self.macServerURL = url
-                }
+                LibraryManager.shared.saveCachedRemoteMetadata(libraryPayload.masterLibrary) // <-- ADD THIS
+                if let url = libraryPayload.streamServerURL { self.macServerURL = url }
             }
+            return true
         }
         // CHANGED: Listens for unique contextQueue variable
         else if let contextPayload = try? JSONDecoder().decode(ContextSyncPayload.self, from: data) {
@@ -609,11 +608,11 @@ extension MultipeerManager: MCSessionDelegate, MCNearbyServiceAdvertiserDelegate
         else if let artworkPayload = try? JSONDecoder().decode(ArtworkSyncPayload.self, from: data) {
             DispatchQueue.main.async {
                 var albumName = self.remoteLibrary.first(where: { $0.id == artworkPayload.songId })?.album
-                if albumName == nil {
-                    albumName = self.remoteContextQueue.first(where: { $0.id == artworkPayload.songId })?.album
-                }
+                if albumName == nil { albumName = self.remoteContextQueue.first(where: { $0.id == artworkPayload.songId })?.album }
                 
                 if let albumName = albumName {
+                    // Deduplicate and save to disk
+                    LibraryManager.shared.saveRemoteArtwork(data: artworkPayload.artworkData, albumName: albumName)
                     for i in self.remoteLibrary.indices {
                         if self.remoteLibrary[i].album == albumName { self.remoteLibrary[i].artworkData = artworkPayload.artworkData }
                     }
@@ -630,6 +629,7 @@ extension MultipeerManager: MCSessionDelegate, MCNearbyServiceAdvertiserDelegate
                 }
                 #endif
             }
+            return true
         }
         else if let lyricsPayload = try? JSONDecoder().decode(StreamLyricsPayload.self, from: data) {
             DispatchQueue.main.async {

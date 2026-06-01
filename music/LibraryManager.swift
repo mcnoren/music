@@ -107,6 +107,54 @@ class LibraryManager: ObservableObject {
     
     @Published var albumArtCrops: [String: AlbumArtCrop] = [:]
     private let albumArtCropsKey = "AlbumArtCropsPersistenceKey"
+
+    @Published var cachedRemoteLibrary: [RemoteSongDTO] = []
+    private let remoteMetadataFileName = "MacMetadataCache.json"
+
+    // Call this at the end of LibraryManager's init()
+    func loadCachedRemoteMetadata() {
+        let url = URL.documentsDirectory.appendingPathComponent(remoteMetadataFileName)
+        if let data = try? Data(contentsOf: url),
+           let decoded = try? JSONDecoder().decode([RemoteSongDTO].self, from: data) {
+            self.cachedRemoteLibrary = decoded
+        }
+    }
+
+    func saveCachedRemoteMetadata(_ library: [RemoteSongDTO]) {
+        self.cachedRemoteLibrary = library
+        let url = URL.documentsDirectory.appendingPathComponent(remoteMetadataFileName)
+        if let data = try? JSONEncoder().encode(library) {
+            try? data.write(to: url, options: .atomic)
+        }
+    }
+
+    // Artwork Deduplication Manager
+    func getRemoteArtworkDirectory() -> URL {
+        let dir = URL.documentsDirectory.appendingPathComponent("RemoteArtworkCache")
+        if !FileManager.default.fileExists(atPath: dir.path) {
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        return dir
+    }
+
+    func saveRemoteArtwork(data: Data, albumName: String) {
+        let safeName = albumName.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
+        let url = getRemoteArtworkDirectory().appendingPathComponent("\(safeName).jpg")
+        
+        // De-duplication: Only save if we don't already have this album's artwork
+        if !FileManager.default.fileExists(atPath: url.path) {
+            try? data.write(to: url)
+        }
+    }
+
+    func getCachedRemoteArtwork(albumName: String) -> UIImage? {
+        let safeName = albumName.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
+        let url = getRemoteArtworkDirectory().appendingPathComponent("\(safeName).jpg")
+        if let data = try? Data(contentsOf: url) {
+            return UIImage(data: data)
+        }
+        return nil
+    }
     
     init() {
         // Load menu order or default, migrating to include Mac and Genres if they don't exist yet

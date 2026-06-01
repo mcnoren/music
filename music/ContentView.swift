@@ -773,6 +773,69 @@ struct SongRow: View {
     }
 }
 
+struct CachedRemoteSongRow: View {
+    let song: RemoteSongDTO
+    @ObservedObject var audioManager: AudioManager
+    @ObservedObject var library: LibraryManager
+    
+    var isConnected: Bool {
+        return MultipeerManager.shared.connectionState == .connected
+    }
+    
+    var body: some View {
+        HStack(spacing: 6) {
+            // Check if audio data is actually on the phone (e.g. downloaded)
+            let isDownloaded = DownloadsManager.shared.downloadedSongs.contains(where: { $0.id == song.id })
+            let isAvailable = isConnected || isDownloaded
+            
+            // Artwork (loads from deduplicated disk storage)
+            if let artwork = library.getCachedRemoteArtwork(albumName: song.album) {
+                Image(uiImage: artwork).resizable().aspectRatio(contentMode: .fit).frame(width: 40, height: 40).cornerRadius(5)
+            } else {
+                Color.gray.opacity(0.3).frame(width: 40, height: 40).cornerRadius(5).overlay(Image(systemName: "music.note").foregroundColor(.white.opacity(0.6)).font(.caption))
+            }
+            
+            Spacer().frame(width: 4)
+            
+            VStack(alignment: .leading, spacing: 2) {
+                Text(song.title)
+                    .font(.subheadline)
+                    .foregroundColor(isAvailable ? .primary : .secondary) // Grey out if not playable
+                
+                Text(song.artist)
+                    .font(.caption)
+                    .foregroundColor(.secondary.opacity(isAvailable ? 1.0 : 0.6))
+            }
+            Spacer()
+            
+            Menu {
+                // Play button is only enabled if connected to the Mac or downloaded
+                if isAvailable {
+                    Button {
+                        // Trigger stream / play logic
+                    } label: { Label("Play", systemImage: "play") }
+                } else {
+                    Text("Connect to Mac to play").font(.caption)
+                }
+                
+                // Add to Playlist is ALWAYS available
+                Button {
+                    NotificationCenter.default.post(name: NSNotification.Name("ShowAddToPlaylist"), object: ["remote_\(song.id)"])
+                } label: { Label("Add to Playlist...", systemImage: "text.badge.plus") }
+                
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.title3)
+                    .foregroundColor(.secondary)
+                    .frame(width: 30, height: 30)
+                    .contentShape(Rectangle())
+            }
+        }
+        .opacity(isConnected ? 1.0 : 0.4) // Grey out the entire row dynamically based on connection
+        .padding(.horizontal, 16).padding(.vertical, 8)
+    }
+}
+
 struct SongMenuContent: View {
     let song: MPMediaItem
     @ObservedObject var library: LibraryManager
@@ -2881,6 +2944,76 @@ struct ArtworkView: View {
         if let artwork = song.artwork?.image(at: CGSize(width: 400, height: 400)) { Image(uiImage: artwork).resizable().aspectRatio(contentMode: .fit).cornerRadius(20).shadow(color: .black.opacity(0.5), radius: 20, x: 0, y: 10) } else { Rectangle().fill(Color.gray.opacity(0.3)).aspectRatio(1.0, contentMode: .fit).cornerRadius(20) }
     }
 }
+
+// Add this anywhere in ContentView.swift
+struct RemoteMetadataStorageView: View {
+    @ObservedObject var library = LibraryManager.shared
+    @State private var jsonSize: String = "Calculating..."
+    @State private var artworkSize: String = "Calculating..."
+    
+    var body: some View {
+        List {
+            Section(header: Text("Storage Overview"), footer: Text("This data allows you to search and add Mac songs to your playlists even when disconnected.")) {
+                HStack {
+                    Text("Library Text Data")
+                    Spacer()
+                    Text(jsonSize).foregroundColor(.secondary)
+                }
+                HStack {
+                    Text("Cached Album Art")
+                    Spacer()
+                    Text(artworkSize).foregroundColor(.secondary)
+                }
+            }
+            
+            Section {
+                Button(role: .destructive, action: clearCache) {
+                    Text("Clear Mac Metadata")
+                }
+            }
+        }
+        .navigationTitle("Mac Metadata")
+        .onAppear(perform: calculateSizes)
+    }
+    
+    private func calculateSizes() {
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useKB, .useMB]
+        formatter.countStyle = .file
+        
+        // 1. JSON Size
+        let jsonURL = URL.documentsDirectory.appendingPathComponent("MacMetadataCache.json")
+        if let attr = try? FileManager.default.attributesOfItem(atPath: jsonURL.path),
+           let size = attr[.size] as? Int64 {
+            jsonSize = formatter.string(fromByteCount: size)
+        } else {
+            jsonSize = "0 KB"
+        }
+        
+        // 2. Artwork Folder Size
+        let artDir = library.getRemoteArtworkDirectory()
+        var totalArtSize: Int64 = 0
+        if let files = try? FileManager.default.contentsOfDirectory(at: artDir, includingPropertiesForKeys: [.fileSizeKey]) {
+            for file in files {
+                if let attr = try? FileManager.default.attributesOfItem(atPath: file.path),
+                   let size = attr[.size] as? Int64 {
+                    totalArtSize += size
+                }
+            }
+        }
+        artworkSize = formatter.string(fromByteCount: totalArtSize)
+    }
+    
+    private func clearCache() {
+        library.cachedRemoteLibrary.removeAll()
+        try? FileManager.default.removeItem(at: URL.documentsDirectory.appendingPathComponent("MacMetadataCache.json"))
+        try? FileManager.default.removeItem(at: library.getRemoteArtworkDirectory())
+        calculateSizes()
+    }
+}
+
+// In SettingsView, add the navigation link to the Data & Storage Section:
+NavigationLink("Manage Mac Metadata") { RemoteMetadataStorageView() }
 
 // MARK: - Video Transfer Helper
 struct VideoTransferable: Transferable {
