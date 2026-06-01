@@ -215,6 +215,13 @@ class MacLibrary: ObservableObject {
         }
         savePlaylists()
     }
+
+    func clearAllFiles() {
+        self.songs.removeAll()
+        self.playlists.removeAll()
+        saveSongs()
+        savePlaylists()
+    }
     
     func deleteAlbum(_ albumName: String) {
         // 1. Remove all matching songs

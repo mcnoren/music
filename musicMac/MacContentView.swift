@@ -474,6 +474,16 @@ struct MacSettingsView: View {
                             MacSyncedLyricsStorageView()
                         }
                     }
+                    Section(header: Text("Library Management").font(.subheadline.bold()).foregroundColor(.secondary)) {
+                        Button(role: .destructive) {
+                            library.clearAllFiles()
+                        } label: {
+                            Text("Clear All Songs & Playlists")
+                        }
+                        Text("This clears your library files for a new upload but keeps your synced lyrics safe.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                 }
                 .formStyle(.grouped) // Matches the native macOS system settings look
             }

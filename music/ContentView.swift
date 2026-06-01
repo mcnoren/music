@@ -1097,6 +1097,7 @@ struct GenreListView: View {
         var genres = Set<String>()
         library.songs.forEach { if let g = $0.genre, !g.isEmpty { genres.insert(g) } }
         downloads.downloadedSongs.forEach { if !$0.genre.isEmpty { genres.insert($0.genre) } }
+        library.cachedRemoteLibrary.forEach { if !$0.genre.isEmpty { genres.insert($0.genre) } }
         var sorted = Array(genres).sorted()
         if !searchText.isEmpty { sorted = sorted.filter { $0.localizedCaseInsensitiveContains(searchText) } }
         return sorted
@@ -1271,6 +1272,7 @@ struct UnifiedGenreDetailView: View {
     
     var appleSongs: [MPMediaItem] { library.songs.filter { $0.genre == genre } }
     var localSongs: [LocalSong] { downloads.downloadedSongs.filter { $0.genre == genre } }
+    var remoteSongs: [RemoteSongDTO] { library.cachedRemoteLibrary.filter { $0.genre == genre } }
     
     var body: some View {
         ScrollView {
@@ -1289,6 +1291,15 @@ struct UnifiedGenreDetailView: View {
                     Section(header: Text("Downloads").font(.headline).foregroundColor(.pink).padding(.horizontal).padding(.vertical, 8).frame(maxWidth: .infinity, alignment: .leading).background(Color(.systemGroupedBackground))) {
                         ForEach(localSongs) { song in
                             DownloadsSongRow(song: song, queue: localSongs, showArtwork: true, showTrackNumber: false, audioManager: audioManager)
+                            Divider().padding(.leading)
+                        }
+                    }
+                }
+                
+                if !remoteSongs.isEmpty {
+                    Section(header: Text("Mac Library").font(.headline).foregroundColor(.pink).padding(.horizontal).padding(.vertical, 8).frame(maxWidth: .infinity, alignment: .leading).background(Color(.systemGroupedBackground))) {
+                        ForEach(remoteSongs) { song in
+                            CachedRemoteSongRow(song: song, audioManager: audioManager, library: library)
                             Divider().padding(.leading)
                         }
                     }
@@ -1519,9 +1530,15 @@ struct ArtistListView: View {
         var allApple = library.artistSections.flatMap { $0.artists }
         var allLocal = Dictionary(grouping: downloads.downloadedSongs, by: { $0.artist }).keys.map { $0 }
         
+        // ---> ADD REMOTE ARTISTS <---
+        var allRemote = Dictionary(grouping: library.cachedRemoteLibrary, by: { $0.artist }).keys.map { $0 }
+        let existingArtists = Set(allApple).union(Set(allLocal))
+        allRemote = allRemote.filter { !existingArtists.contains($0) }
+        
         if !searchText.isEmpty {
             allApple = library.smartFilterArtists(in: allApple, for: searchText)
             allLocal = allLocal.filter { $0.localizedCaseInsensitiveContains(searchText) }
+            allRemote = allRemote.filter { $0.localizedCaseInsensitiveContains(searchText) }
         }
         
         var unified: [UnifiedArtistItem] = []
@@ -1529,6 +1546,10 @@ struct ArtistListView: View {
         unified.append(contentsOf: allLocal.map { artist in
             let songs = downloads.downloadedSongs.filter { s in s.artist == artist }
             return UnifiedArtistItem(id: "local_\(artist)", name: artist, sortName: artist, appleArtist: nil, localWrapper: LocalArtistWrapper(name: artist, songs: songs))
+        })
+        unified.append(contentsOf: allRemote.map { artist in
+            let songs = library.cachedRemoteLibrary.filter { $0.artist == artist }
+            return UnifiedArtistItem(id: "remote_\(artist)", name: artist, sortName: artist, appleArtist: nil, localWrapper: nil, remoteWrapper: RemoteArtistWrapper(name: artist, songs: songs))
         })
         
         let groupedByName = Dictionary(grouping: unified, by: { $0.name.lowercased() })
@@ -1559,8 +1580,17 @@ struct ArtistListView: View {
                             Section(header: Text(section.letter).font(.headline).foregroundColor(.pink).padding(.horizontal).padding(.vertical, 8).frame(maxWidth: .infinity, alignment: .leading).background(Color(.systemBackground)).id(section.letter)) {
                                 ForEach(section.artists) { item in
                                     NavigationLink(value: item) {
-                                        Text(item.name).font(.body).foregroundColor(.primary).padding(.horizontal).padding(.vertical, 12).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                                        Text(item.name)
+                                            .font(.body)
+                                            // GREYS OUT IF DISCONNECTED
+                                            .foregroundColor((item.remoteWrapper != nil && MultipeerManager.shared.connectionState != .connected) ? .secondary : .primary)
+                                            .padding(.horizontal)
+                                            .padding(.vertical, 12)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                            .contentShape(Rectangle())
                                     }
+                                    // MAKES UNCLICKABLE IF DISCONNECTED
+                                    .disabled(item.remoteWrapper != nil && MultipeerManager.shared.connectionState != .connected)
                                     Divider().padding(.leading)
                                 }
                             }
@@ -1693,32 +1723,32 @@ struct AlbumListView: View {
         var appleAlbums = showFavoritesOnly ? library.favoriteAlbums : library.albums
         if !searchText.isEmpty { appleAlbums = library.smartFilterAlbums(in: appleAlbums, for: searchText) }
         
-        // APPLY FILTERS: Apple Music
         if filterType == .full { appleAlbums = appleAlbums.filter { $0.count >= 4 } }
         if selectedGenre != "All Genres" { appleAlbums = appleAlbums.filter { $0.representativeItem?.genre == selectedGenre } }
         
         var allLocalSongs = downloads.downloadedSongs
-        let pendingTasks = MultipeerManager.shared.currentDownloads.values
-        for task in pendingTasks {
-            if let meta = task.metadata, !allLocalSongs.contains(where: { $0.id == meta.fileName }) {
-                let tempSong = LocalSong(id: meta.fileName, url: URL(fileURLWithPath: ""), title: meta.title, artist: meta.artist, album: meta.album, duration: 0, artworkData: nil, trackNumber: meta.trackNumber ?? 0, discNumber: meta.discNumber)
-                allLocalSongs.append(tempSong)
-            }
-        }
-        
+        // ... (Keep existing download task checking logic) ...
         var localAlbums = allLocalSongs
         if showFavoritesOnly { localAlbums = [] }
         let groupedLocal = Dictionary(grouping: localAlbums, by: { $0.album })
         var filteredLocalNames = groupedLocal.keys.sorted()
         if !searchText.isEmpty { filteredLocalNames = filteredLocalNames.filter { $0.localizedCaseInsensitiveContains(searchText) } }
         
-        // APPLY FILTERS: Local Downloads
-        if filterType == .full {
-            filteredLocalNames = filteredLocalNames.filter { (groupedLocal[$0]?.count ?? 0) >= 4 }
-        }
-        if selectedGenre != "All Genres" {
-            filteredLocalNames = filteredLocalNames.filter { (groupedLocal[$0]?.first?.genre ?? "Album") == selectedGenre }
-        }
+        if filterType == .full { filteredLocalNames = filteredLocalNames.filter { (groupedLocal[$0]?.count ?? 0) >= 4 } }
+        if selectedGenre != "All Genres" { filteredLocalNames = filteredLocalNames.filter { (groupedLocal[$0]?.first?.genre ?? "Album") == selectedGenre } }
+        
+        // ---> ADD REMOTE ALBUMS <---
+        let remoteSongs = library.cachedRemoteLibrary
+        let groupedRemote = Dictionary(grouping: remoteSongs, by: { $0.album })
+        var remoteAlbumNames = groupedRemote.keys.sorted()
+        
+        if showFavoritesOnly { remoteAlbumNames = [] }
+        if !searchText.isEmpty { remoteAlbumNames = remoteAlbumNames.filter { $0.localizedCaseInsensitiveContains(searchText) } }
+        if filterType == .full { remoteAlbumNames = remoteAlbumNames.filter { (groupedRemote[$0]?.count ?? 0) >= 4 } }
+        if selectedGenre != "All Genres" { remoteAlbumNames = remoteAlbumNames.filter { (groupedRemote[$0]?.first?.genre ?? "Album") == selectedGenre } }
+        
+        let localAlbumNamesSet = Set(filteredLocalNames)
+        remoteAlbumNames = remoteAlbumNames.filter { !localAlbumNamesSet.contains($0) }
         
         var unified: [UnifiedAlbumItem] = []
         unified.append(contentsOf: appleAlbums.map {
@@ -1726,13 +1756,17 @@ struct AlbumListView: View {
         })
         unified.append(contentsOf: filteredLocalNames.map { name in
             let songs = groupedLocal[name] ?? []
-            let artist = songs.first?.artist ?? "Unknown"
-            return UnifiedAlbumItem(id: "local_\(name)", title: name, artist: artist, sortTitle: name, appleAlbum: nil, localWrapper: LocalAlbumWrapper(name: name, songs: songs))
+            return UnifiedAlbumItem(id: "local_\(name)", title: name, artist: songs.first?.artist ?? "Unknown", sortTitle: name, appleAlbum: nil, localWrapper: LocalAlbumWrapper(name: name, songs: songs))
+        })
+        // Append Remote Albums
+        unified.append(contentsOf: remoteAlbumNames.map { name in
+            let songs = groupedRemote[name] ?? []
+            return UnifiedAlbumItem(id: "remote_\(name)", title: name, artist: songs.first?.artist ?? "Unknown", sortTitle: name, appleAlbum: nil, localWrapper: nil, remoteWrapper: RemoteAlbumWrapper(name: name, songs: songs))
         })
         
-        // APPLY SORT: Grouping
+        // ... (Keep existing sorting and grouping logic below) ...
         let grouped = Dictionary(grouping: unified) { item -> String in
-            if sortType == .trackCount { return "#" } // Consolidate into a single visual list for Track Count
+            if sortType == .trackCount { return "#" }
             let sortString = sortType == .artistAZ ? item.artist : item.sortTitle
             let prefix = sortString.prefix(1).uppercased()
             return prefix.rangeOfCharacter(from: .letters) != nil ? prefix : "#"
@@ -1753,10 +1787,10 @@ struct AlbumListView: View {
                     if $0.artist == $1.artist { return $0.sortTitle < $1.sortTitle }
                     return $0.artist < $1.artist
                 case .trackCount:
-                    let count0 = $0.appleAlbum?.count ?? $0.localWrapper?.songs.count ?? 0
-                    let count1 = $1.appleAlbum?.count ?? $1.localWrapper?.songs.count ?? 0
+                    let count0 = $0.appleAlbum?.count ?? $0.localWrapper?.songs.count ?? $0.remoteWrapper?.songs.count ?? 0
+                    let count1 = $1.appleAlbum?.count ?? $1.localWrapper?.songs.count ?? $1.remoteWrapper?.songs.count ?? 0
                     if count0 == count1 { return $0.sortTitle < $1.sortTitle }
-                    return count0 > count1 // Highest track count goes first!
+                    return count0 > count1
                 }
             }
             return UnifiedAlbumSection(letter: letter, albums: sortedAlbums)
@@ -1811,6 +1845,7 @@ struct AlbumListView: View {
                                         }
                                     }
                                 }
+                                .disabled(item.remoteWrapper != nil && MultipeerManager.shared.connectionState != .connected)
                                 .contextMenu {
                                     if let apple = item.appleAlbum {
                                         Button { audioManager.play(song: apple.items.first!, queue: apple.items) } label: { Label("Play", systemImage: "play") }
@@ -2293,12 +2328,25 @@ struct SongListView: View {
         if showFavoritesOnly { localSongs = [] }
         if !searchText.isEmpty { localSongs = localSongs.filter { $0.title.localizedCaseInsensitiveContains(searchText) || $0.artist.localizedCaseInsensitiveContains(searchText) } }
         
+        // ---> ADD REMOTE SONGS <---
+        var remoteSongs = library.cachedRemoteLibrary
+        if showFavoritesOnly { remoteSongs = [] }
+        if !searchText.isEmpty { remoteSongs = remoteSongs.filter { $0.title.localizedCaseInsensitiveContains(searchText) || $0.artist.localizedCaseInsensitiveContains(searchText) } }
+        
+        // Deduplicate: Don't show remote songs if they are already downloaded
+        let localIds = Set(localSongs.map { $0.id })
+        remoteSongs = remoteSongs.filter { !localIds.contains($0.id) }
+        
         var unified: [UnifiedSongItem] = []
         unified.append(contentsOf: appleSongs.map {
             UnifiedSongItem(id: String($0.persistentID), title: $0.title ?? "Unknown", artist: $0.artist ?? "Unknown", sortTitle: $0.title ?? "Unknown", appleSong: $0, localSong: nil)
         })
         unified.append(contentsOf: localSongs.map {
             UnifiedSongItem(id: $0.id, title: $0.title, artist: $0.artist, sortTitle: $0.title, appleSong: nil, localSong: $0)
+        })
+        // Combine into unified array
+        unified.append(contentsOf: remoteSongs.map {
+            UnifiedSongItem(id: "remote_\($0.id)", title: $0.title, artist: $0.artist, sortTitle: $0.title, appleSong: nil, localSong: nil, remoteSong: $0)
         })
         
         let grouped = Dictionary(grouping: unified) { item -> String in
@@ -2338,6 +2386,9 @@ struct SongListView: View {
                                             .onTapGesture { audioManager.play(song: apple, queue: appleQueue) }
                                     } else if let local = item.localSong {
                                         DownloadsSongRow(song: local, queue: localQueue, showArtwork: showArtwork, showTrackNumber: false, audioManager: audioManager)
+                                    } else if let remote = item.remoteSong {
+                                        // Renders it greyed out automatically based on connection state
+                                        CachedRemoteSongRow(song: remote, audioManager: audioManager, library: library)
                                     }
                                     Divider().padding(.leading)
                                 }

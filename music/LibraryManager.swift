@@ -236,7 +236,8 @@ class LibraryManager: ObservableObject {
                let decoded = try? JSONDecoder().decode([String: PinnedAlbumCache].self, from: data) {
                 self.pinnedAlbumCache = decoded
             }
-            // -----------------------------------------------
+            
+            loadCachedRemoteMetadata()
         }
         self.menuItems = savedMenu
         
