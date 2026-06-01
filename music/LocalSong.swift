@@ -578,7 +578,6 @@ struct DownloadsSongRow: View {
     var queue: [LocalSong] = []
     var showArtwork: Bool = true
     var showTrackNumber: Bool = false
-    
     var customPrimaryColor: Color? = nil
     var customSecondaryColor: Color? = nil
     var showArtist: Bool = true
@@ -586,99 +585,34 @@ struct DownloadsSongRow: View {
     @ObservedObject var audioManager = AudioManager.shared
     @ObservedObject var library = LibraryManager.shared
     
-    @State private var dominantColor: Color = .clear
     var isPlaying: Bool { audioManager.currentLocalSong?.id == song.id }
     
-    var hasSynced: Bool {
-        let lines = song.syncedLyrics ?? library.getSyncedLyrics(id: song.id, title: song.title, artist: song.artist)
-        return lines?.isFullySynced == true
-    }
-    var hasCustomRaw: Bool {
-        return library.customRawLyrics[song.id] != nil && !library.customRawLyrics[song.id]!.isEmpty
-    }
-    var hasNativeRaw: Bool {
-        return song.lyrics != nil && !song.lyrics!.isEmpty
-    }
-    var showUnfilledBubble: Bool {
-        return hasCustomRaw || hasNativeRaw
-    }
-    
     var body: some View {
-        ZStack {
-            if isPlaying {
-                Rectangle().fill(dominantColor.opacity(0.3)).mask(Rectangle())
-                    .onAppear { updateColor() }
-                    .onChange(of: isPlaying) { playing in if playing { updateColor() } }
+        let artworkImage = song.artworkData != nil ? UIImage(data: song.artworkData!) : nil
+        let hasSynced = song.syncedLyrics?.isFullySynced == true || library.getSyncedLyrics(id: song.id, title: song.title, artist: song.artist)?.isFullySynced == true
+        let hasCustomRaw = library.customRawLyrics[song.id] != nil && !library.customRawLyrics[song.id]!.isEmpty
+        let hasNativeRaw = song.lyrics != nil && !song.lyrics!.isEmpty
+        
+        UniversalCustomSongRow(
+            title: song.title,
+            artist: song.artist,
+            trackNumber: song.trackNumber,
+            hasSynced: hasSynced,
+            showUnfilledBubble: hasCustomRaw || hasNativeRaw,
+            artwork: artworkImage,
+            isPlaying: isPlaying,
+            showArtwork: showArtwork,
+            showTrackNumber: showTrackNumber,
+            showArtist: showArtist,
+            customPrimaryColor: customPrimaryColor,
+            customSecondaryColor: customSecondaryColor,
+            onTap: {
+                let impact = UIImpactFeedbackGenerator(style: .medium)
+                impact.impactOccurred()
+                audioManager.play(localSong: song, queue: queue.isEmpty ? [song] : queue)
             }
-            
-            HStack(spacing: 6) {
-                Color.clear.frame(width: 12)
-                
-                if hasSynced {
-                    Image(systemName: "quote.bubble.fill").font(.caption2).foregroundColor(.pink).frame(width: 12)
-                } else if showUnfilledBubble {
-                    Image(systemName: "quote.bubble").font(.caption2).foregroundColor(.gray).frame(width: 12)
-                } else {
-                    Color.clear.frame(width: 12)
-                }
-                
-                if showTrackNumber {
-                    if song.trackNumber > 0 {
-                        Text("\(song.trackNumber)").font(.caption).monospacedDigit().foregroundColor(.gray).frame(width: 20, alignment: .trailing)
-                    } else {
-                        Color.clear.frame(width: 20)
-                    }
-                }
-                
-                if showArtwork {
-                    if let data = song.artworkData, let uiImage = UIImage(data: data) {
-                        Image(uiImage: uiImage).resizable().aspectRatio(contentMode: .fit).frame(width: 40, height: 40).cornerRadius(5)
-                    } else {
-                        Color.gray.opacity(0.3).frame(width: 40, height: 40).cornerRadius(5).overlay(Image(systemName: "music.note").foregroundColor(.white.opacity(0.6)).font(.caption))
-                    }
-                }
-                Spacer().frame(width: 4)
-                
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(song.title)
-                        .font(.subheadline)
-                        .fontWeight(isPlaying ? .bold : .regular)
-                        .foregroundColor(isPlaying ? .pink : (customPrimaryColor ?? .primary))
-                        .lineLimit(1)
-                    
-                    if showArtist {
-                        Text(song.artist)
-                            .font(.caption)
-                            .foregroundColor(customSecondaryColor ?? .secondary)
-                            .lineLimit(1)
-                    }
-                }
-                .frame(minHeight: 36, alignment: .center)
-                Spacer()
-                
-                Menu { DownloadsSongMenuContent(song: song) } label: {
-                    Image(systemName: "ellipsis").font(.title3).foregroundColor(.pink).frame(width: 30, height: 30).contentShape(Rectangle())
-                }
-                .highPriorityGesture(TapGesture())
-            }
-            .frame(minHeight: 50)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 4)
-        }
-        .contentShape(Rectangle())
-        .onTapGesture {
-            let impact = UIImpactFeedbackGenerator(style: .medium)
-            impact.impactOccurred()
-            audioManager.play(localSong: song, queue: queue.isEmpty ? [song] : queue)
-        }
-        .contextMenu { DownloadsSongMenuContent(song: song) }
-    }
-    
-    private func updateColor() {
-        if let data = song.artworkData, let img = UIImage(data: data) {
-            dominantColor = img.dominantColor
-        } else {
-            dominantColor = .gray
+        ) {
+            DownloadsSongMenuContent(song: song)
         }
     }
 }

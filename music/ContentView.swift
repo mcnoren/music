@@ -780,54 +780,22 @@ struct CachedRemoteSongRow: View {
     @ObservedObject var audioManager: AudioManager
     @ObservedObject var library: LibraryManager
     
+    var isPlaying: Bool { audioManager.currentRemoteDTO?.id == song.id }
+    
     var body: some View {
-        HStack(spacing: 6) {
-            Color.clear.frame(width: 12)
-            
-            if song.hasSyncedLyrics || library.getSyncedLyrics(id: song.id, title: song.title, artist: song.artist) != nil {
-                Image(systemName: "quote.bubble.fill").font(.caption2).foregroundColor(.pink).frame(width: 12)
-            } else if song.hasLyrics || library.customRawLyrics[song.id] != nil {
-                Image(systemName: "quote.bubble").font(.caption2).foregroundColor(.gray).frame(width: 12)
-            } else {
-                Color.clear.frame(width: 12)
-            }
-            
-            if song.trackNumber > 0 {
-                Text("\(song.trackNumber)").font(.caption).monospacedDigit().foregroundColor(.gray).frame(width: 20, alignment: .trailing)
-            } else {
-                Color.clear.frame(width: 20)
-            }
-            
-            if let artwork = library.getCachedRemoteArtwork(albumName: song.album) {
-                Image(uiImage: artwork).resizable().aspectRatio(contentMode: .fit).frame(width: 40, height: 40).cornerRadius(5)
-            } else {
-                Color.gray.opacity(0.3).frame(width: 40, height: 40).cornerRadius(5).overlay(Image(systemName: "music.note").foregroundColor(.white.opacity(0.6)).font(.caption))
-            }
-            
-            Spacer().frame(width: 4)
-            
-            VStack(alignment: .leading, spacing: 2) {
-                Text(song.title).font(.subheadline).foregroundColor(.primary)
-                Text(song.artist).font(.caption).foregroundColor(.secondary)
-            }
-            Spacer()
-            
-            Menu {
-                Button {
-                    audioManager.playStream(remoteSong: song, queue: [song])
-                } label: { Label("Play", systemImage: "play") }
-                Button {
-                    NotificationCenter.default.post(name: NSNotification.Name("ShowAddToPlaylist"), object: ["remote_\(song.id)"])
-                } label: { Label("Add to Playlist...", systemImage: "text.badge.plus") }
-            } label: {
-                Image(systemName: "ellipsis")
-                    .font(.title3)
-                    .foregroundColor(.pink)
-                    .frame(width: 30, height: 30)
-                    .contentShape(Rectangle())
-            }
+        UniversalCustomSongRow(
+            title: song.title,
+            artist: song.artist,
+            trackNumber: song.trackNumber,
+            hasSynced: song.hasSyncedLyrics || library.getSyncedLyrics(id: song.id, title: song.title, artist: song.artist) != nil,
+            showUnfilledBubble: song.hasLyrics || library.customRawLyrics[song.id] != nil,
+            artwork: library.getCachedRemoteArtwork(albumName: song.album),
+            isPlaying: isPlaying,
+            onTap: { audioManager.playStream(remoteSong: song, queue: [song]) }
+        ) {
+            Button { audioManager.playStream(remoteSong: song, queue: [song]) } label: { Label("Play", systemImage: "play") }
+            Button { NotificationCenter.default.post(name: NSNotification.Name("ShowAddToPlaylist"), object: ["remote_\(song.id)"]) } label: { Label("Add to Playlist...", systemImage: "text.badge.plus") }
         }
-        .padding(.horizontal, 16).padding(.vertical, 8)
     }
 }
 
@@ -1295,8 +1263,6 @@ struct UnifiedGenreDetailView: View {
                     Section(header: Text("Mac Library").font(.headline).foregroundColor(.pink).padding(.horizontal).padding(.vertical, 8).frame(maxWidth: .infinity, alignment: .leading).background(Color(.systemGroupedBackground))) {
                         ForEach(remoteSongs) { song in
                             CachedRemoteSongRow(song: song, audioManager: audioManager, library: library)
-                                .opacity(MultipeerManager.shared.connectionState != .connected ? 0.4 : 1.0)
-                                .disabled(MultipeerManager.shared.connectionState != .connected)
                             Divider().padding(.leading)
                         }
                     }
@@ -1671,8 +1637,6 @@ struct UnifiedArtistDetailView: View {
                         Section(header: Text("Mac Library").font(.headline).foregroundColor(.pink).padding(.horizontal).padding(.vertical, 8).frame(maxWidth: .infinity, alignment: .leading).background(Color(.systemGroupedBackground))) {
                             ForEach(remoteSongs) { song in
                                 CachedRemoteSongRow(song: song, audioManager: audioManager, library: library)
-                                    .opacity(MultipeerManager.shared.connectionState != .connected ? 0.4 : 1.0)
-                                    .disabled(MultipeerManager.shared.connectionState != .connected)
                                 Divider().padding(.leading)
                             }
                         }
@@ -1852,7 +1816,6 @@ struct AlbumListView: View {
                                             else if let remote = item.remoteWrapper { Text("\(remote.songs.count) Songs").font(.caption2).foregroundColor(.gray).lineLimit(1) }
                                         }
                                     }
-                                    .opacity((item.remoteWrapper != nil && MultipeerManager.shared.connectionState != .connected) ? 0.4 : 1.0)
                                 }
                                 // COMPLETELY REMOVED THE .disabled() BLOCK FROM HERE
                                 .contextMenu {
@@ -2398,9 +2361,6 @@ struct SongListView: View {
                                     } else if let remote = item.remoteSong {
                                         // Renders it greyed out automatically based on connection state
                                         CachedRemoteSongRow(song: remote, audioManager: audioManager, library: library)
-                                            .opacity(MultipeerManager.shared.connectionState != .connected ? 0.4 : 1.0)
-                                            .disabled(MultipeerManager.shared.connectionState != .connected)
-                                    }
                                     Divider().padding(.leading)
                                 }
                             }
@@ -4531,6 +4491,98 @@ struct TimingTextField: View {
             Text("sec")
                 .foregroundColor(.secondary)
         }
+    }
+}
+    
+struct UniversalCustomSongRow<MenuContent: View>: View {
+    let title: String
+    let artist: String
+    let trackNumber: Int
+    let hasSynced: Bool
+    let showUnfilledBubble: Bool
+    let artwork: UIImage?
+    let isPlaying: Bool
+    
+    var showArtwork: Bool = true
+    var showTrackNumber: Bool = false
+    var showArtist: Bool = true
+    var customPrimaryColor: Color? = nil
+    var customSecondaryColor: Color? = nil
+    
+    let onTap: () -> Void
+    @ViewBuilder let menuContent: () -> MenuContent
+    
+    @State private var dominantColor: Color = .clear
+    
+    var body: some View {
+        ZStack {
+            if isPlaying {
+                Rectangle().fill(dominantColor.opacity(0.3)).mask(Rectangle())
+                    .onAppear { updateColor() }
+                    .onChange(of: isPlaying) { playing in if playing { updateColor() } }
+            }
+            
+            HStack(spacing: 6) {
+                Color.clear.frame(width: 12)
+                
+                if hasSynced {
+                    Image(systemName: "quote.bubble.fill").font(.caption2).foregroundColor(customSecondaryColor ?? .pink).frame(width: 12)
+                } else if showUnfilledBubble {
+                    Image(systemName: "quote.bubble").font(.caption2).foregroundColor(customSecondaryColor ?? .gray).frame(width: 12)
+                } else {
+                    Color.clear.frame(width: 12)
+                }
+                
+                if showTrackNumber {
+                    if trackNumber > 0 {
+                        Text("\(trackNumber)").font(.caption).monospacedDigit().foregroundColor(customSecondaryColor ?? .gray).frame(width: 20, alignment: .trailing)
+                    } else {
+                        Color.clear.frame(width: 20)
+                    }
+                }
+                
+                if showArtwork {
+                    if let img = artwork {
+                        Image(uiImage: img).resizable().aspectRatio(contentMode: .fit).frame(width: 40, height: 40).cornerRadius(5)
+                    } else {
+                        Color.gray.opacity(0.3).frame(width: 40, height: 40).cornerRadius(5).overlay(Image(systemName: "music.note").foregroundColor(.white.opacity(0.6)).font(.caption))
+                    }
+                }
+                Spacer().frame(width: 4)
+                
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.subheadline)
+                        .fontWeight(isPlaying ? .bold : .regular)
+                        .foregroundColor(isPlaying ? .pink : (customPrimaryColor ?? .primary))
+                        .lineLimit(1)
+                    
+                    if showArtist {
+                        Text(artist)
+                            .font(.caption)
+                            .foregroundColor(customSecondaryColor ?? .secondary)
+                            .lineLimit(1)
+                    }
+                }
+                .frame(minHeight: 36, alignment: .center)
+                Spacer()
+                
+                Menu { menuContent() } label: {
+                    Image(systemName: "ellipsis").font(.title3).foregroundColor(customSecondaryColor ?? .pink).frame(width: 30, height: 30).contentShape(Rectangle())
+                }
+                .highPriorityGesture(TapGesture())
+            }
+            .frame(minHeight: 50)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 4)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { onTap() }
+    }
+    
+    private func updateColor() {
+        if let img = artwork { dominantColor = img.dominantColor }
+        else { dominantColor = .gray }
     }
 }
 
