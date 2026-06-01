@@ -36,16 +36,14 @@ struct SyncCommand: Codable {
     let command: String
 }
 
-// CHANGED: Unique variable names to prevent JSONDecoder confusion
 struct ContextSyncPayload: Codable {
     let contextQueue: [RemoteSongDTO]
     var streamServerURL: String?
 }
 
-// MultipeerManager.swift (Shared)
 struct LibrarySyncPayload: Codable {
     let masterLibrary: [RemoteSongDTO]
-    var streamServerURL: String? // Add this property
+    var streamServerURL: String?
 }
 
 struct ArtworkSyncPayload: Codable {
@@ -53,7 +51,6 @@ struct ArtworkSyncPayload: Codable {
     let artworkData: Data
 }
 
-// ---> ADD THIS NEW STRUCT <---
 struct StreamLyricsPayload: Codable {
     let songId: String
     let lyrics: String?
@@ -185,8 +182,9 @@ class MultipeerManager: NSObject, ObservableObject {
     @Published var librarySyncProgress: Double = 0.0
     private var librarySyncObservation: NSKeyValueObservation?
     
+    // MARK: - Lazy Loading Properties
     @Published var requestedArtworkAlbums: Set<String> = []
-        
+    
     func requestArtworkLazily(for song: RemoteSongDTO) {
         #if os(iOS)
         let album = song.album
@@ -200,11 +198,246 @@ class MultipeerManager: NSObject, ObservableObject {
         #endif
     }
     
-    // Ensure this returns a Bool so the function above knows if it successfully parsed the JSON
+    func cancelDownloads(for albumName: String) {
+        DispatchQueue.main.async {
+            let tasksToRemove = self.currentDownloads.values.filter { $0.metadata?.album == albumName }
+            for task in tasksToRemove {
+                self.cancelledDownloads.insert(task.id)
+                self.currentDownloads.removeValue(forKey: task.id)
+            }
+        }
+    }
+    
+    #if os(macOS)
+    var onRequestLibrary: (() -> [RemoteSongDTO])?
+    var onRequestAlbums: (() -> [RemoteAlbumSummary])?
+    var onRequestArtists: (() -> [String])?
+    var onRequestSongsForAlbum: ((String) -> [RemoteSongDTO])?
+    var onRequestSongsForArtist: ((String) -> [RemoteSongDTO])?
+    
+    var onRequestArtwork: ((String) -> Void)?
+    var onRequestLyrics: ((String) -> Void)?
+    var onPlayRequestedSong: ((String) -> Void)?
+    var onDownloadRequestedSong: ((String) -> Void)?
+    var onStreamRequestedSong: ((String) -> Void)?
+    var onReceiveLyricsSync: (([String: SyncedLyricsDocument]) -> Void)?
+    var onPeerConnected: (() -> Void)?
+    #endif
+
+    func sendArtworkPayload(_ payload: ArtworkSyncPayload) {
+        guard !session.connectedPeers.isEmpty else { return }
+        do {
+            let data = try JSONEncoder().encode(payload)
+            try session.send(data, toPeers: session.connectedPeers, with: .reliable)
+        } catch {
+            print("Failed to send artwork payload: \(error)")
+        }
+    }
+    
+    // MARK: - Unified Network Router
+    func sendDataToPeers(_ data: Data, isBinary: Bool = false, isReliable: Bool = true) {
+        // 1. Wi-Fi Route (Multipeer)
+        if !session.connectedPeers.isEmpty {
+            try? session.send(data, toPeers: session.connectedPeers, with: isReliable ? .reliable : .unreliable)
+        }
+        // 2. Cellular Route (WebRTC)
+        // If Multipeer is empty, always pipe through WebRTC
+        else {
+            WebRTCManager.shared.sendToDataChannel(data, isBinary: isBinary)
+        }
+    }
+    
+    override init() {
+        #if os(iOS)
+        let defaultName = UIDevice.current.name
+        #else
+        let defaultName = Host.current().localizedName ?? "Mac"
+        #endif
+        
+        if let data = UserDefaults.standard.data(forKey: "savedPeerID"),
+           let savedPeerID = try? NSKeyedUnarchiver.unarchivedObject(ofClass: MCPeerID.self, from: data) {
+            myPeerId = savedPeerID
+        } else {
+            myPeerId = MCPeerID(displayName: defaultName)
+            if let data = try? NSKeyedArchiver.archivedData(withRootObject: myPeerId, requiringSecureCoding: true) {
+                UserDefaults.standard.set(data, forKey: "savedPeerID")
+            }
+        }
+        
+        super.init()
+        setupSession()
+        
+        #if os(iOS)
+        NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in self?.disconnect() }
+        NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in self?.rebuildSessionAndConnect() }
+        DispatchQueue.main.async { self.startAutoConnect() }
+        #endif
+    }
+    
+    private func setupSession() {
+        session = MCSession(peer: myPeerId, securityIdentity: nil, encryptionPreference: .required)
+        session.delegate = self
+        advertiser = MCNearbyServiceAdvertiser(peer: myPeerId, discoveryInfo: nil, serviceType: serviceType)
+        advertiser.delegate = self
+        browser = MCNearbyServiceBrowser(peer: myPeerId, serviceType: serviceType)
+        browser.delegate = self
+    }
+    
+    func rebuildSessionAndConnect() {
+        session?.disconnect()
+        advertiser?.stopAdvertisingPeer()
+        browser?.stopBrowsingForPeers()
+        
+        setupSession()
+        startAutoConnect()
+    }
+    
+    func startAutoConnect() {
+        guard connectionState != .connected else { return }
+        connectionState = .connecting
+        browser.startBrowsingForPeers()
+    }
+        
+    func startBrowsing() {
+        startAutoConnect()
+    }
+    
+    func startAdvertising() { advertiser.startAdvertisingPeer() }
+    
+    func disconnect() {
+        session.disconnect()
+        DispatchQueue.main.async {
+            self.connectionState = .disconnected
+            self.connectedPeers = []
+            self.isCastingToMac = false
+            self.latestPayload?.isCasting = false
+        }
+    }
+    
+    func sendSyncPayload(_ payload: PlaybackSyncPayload) {
+        guard !session.connectedPeers.isEmpty else { return }
+        do {
+            var finalPayload = payload
+            finalPayload.isCasting = self.isCastingToMac
+            let data = try JSONEncoder().encode(finalPayload)
+            try session.send(data, toPeers: session.connectedPeers, with: .unreliable)
+        } catch {}
+    }
+    
+    func syncAlbumColors(colors: [String: String]) {
+        guard !session.connectedPeers.isEmpty else { return }
+        let payload = AlbumColorsSyncPayload(colors: colors)
+        if let encoded = try? JSONEncoder().encode(payload) {
+            try? session.send(encoded, toPeers: session.connectedPeers, with: .reliable)
+        }
+    }
+    
+    func sendCommand(_ command: String) {
+        let syncCmd = SyncCommand(command: command)
+        if let data = try? JSONEncoder().encode(syncCmd) {
+            sendDataToPeers(data, isBinary: false)
+        }
+    }
+    
+    func sendStream(url: URL, streamName: String) {
+        guard let peer = session.connectedPeers.first else { return }
+        let hasAccess = url.startAccessingSecurityScopedResource()
+        session.sendResource(at: url, withName: streamName, toPeer: peer) { [weak self] error in
+            if hasAccess { url.stopAccessingSecurityScopedResource() }
+            if let error = error {
+                print("Stream transfer failed: \(error)")
+                self?.sendCommand("DOWNLOAD_ERROR:Stream failed to load.")
+            }
+        }
+    }
+    
+    func sendFile(url: URL) {
+        guard let peer = session.connectedPeers.first else { return }
+        let hasAccess = url.startAccessingSecurityScopedResource()
+        session.sendResource(at: url, withName: url.lastPathComponent, toPeer: peer) { [weak self] error in
+            if hasAccess { url.stopAccessingSecurityScopedResource() }
+            if let error = error {
+                print("File transfer failed: \(error)")
+                self?.sendCommand("DOWNLOAD_ERROR:Failed to read file on Mac. Check macOS folder permissions.")
+            }
+        }
+    }
+    
+    func syncLyricsDatabase(documents: [String: SyncedLyricsDocument]) {
+        guard !session.connectedPeers.isEmpty else { return }
+        do {
+            let payload = LyricsSyncPayload(documents: documents)
+            let data = try JSONEncoder().encode(payload)
+            try session.send(data, toPeers: session.connectedPeers, with: .reliable)
+        } catch {
+            print("Failed to sync lyrics: \(error)")
+        }
+    }
+}
+
+extension MultipeerManager: MCSessionDelegate, MCNearbyServiceAdvertiserDelegate, MCNearbyServiceBrowserDelegate {
+    
+    func session(_ session: MCSession, peer peerID: MCPeerID, didChange state: MCSessionState) {
+        DispatchQueue.main.async {
+            self.connectedPeers = session.connectedPeers
+            if state == .connected {
+                self.connectionState = .connected
+                self.connectionTimer?.invalidate()
+                #if os(iOS)
+                self.syncLyricsDatabase(documents: LibraryManager.shared.syncedLyrics)
+                self.sendCommand("REQUEST_LIBRARY")
+                #elseif os(macOS)
+                DispatchQueue.main.async { self.onPeerConnected?() }
+                #endif
+            } else if state == .notConnected {
+                self.connectionState = .disconnected
+                self.isCastingToMac = false
+                self.remoteLibrary = []
+                
+                #if os(macOS)
+                self.session?.disconnect()
+                self.advertiser?.stopAdvertisingPeer()
+                self.setupSession()
+                self.advertiser.startAdvertisingPeer()
+                #elseif os(iOS)
+                self.startAutoConnect()
+                #endif
+            }
+        }
+    }
+    
+    func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
+        DispatchQueue.main.async {
+            var isHandled = false
+            
+            // 1. Check if it's a known string command
+            if let text = String(data: data, encoding: .utf8) {
+                isHandled = WebRTCManager.shared.handleCommand(text)
+            }
+            
+            // 2. JSON check (first byte 123 == '{')
+            if !isHandled, data.first == 123 {
+                isHandled = self.processReceivedData(data)
+            }
+            
+            // 3. Audio Chunk
+            if !isHandled {
+                WebRTCManager.shared.downloadedData[WebRTCManager.shared.receivingSongId, default: Data()].append(data)
+                WebRTCManager.shared.processPendingRequests()
+            }
+        }
+    }
+    
     @discardableResult
     func processReceivedData(_ data: Data) -> Bool {
         if let payload = try? JSONDecoder().decode(PlaybackSyncPayload.self, from: data) {
-            DispatchQueue.main.async { self.latestPayload = payload; if payload.isMetadataUpdate { self.remoteArtworkData = payload.artworkData; self.remoteSyncedLyrics = payload.fullSyncedLyrics ?? [] } }
+            DispatchQueue.main.async {
+                self.latestPayload = payload
+                if payload.isMetadataUpdate {
+                    self.remoteArtworkData = payload.artworkData
+                    self.remoteSyncedLyrics = payload.fullSyncedLyrics ?? []
+                }
+            }
             return true
         }
         else if let libraryPayload = try? JSONDecoder().decode(LibrarySyncPayload.self, from: data) {
@@ -213,6 +446,22 @@ class MultipeerManager: NSObject, ObservableObject {
                 
                 #if os(iOS)
                 LibraryManager.shared.saveCachedRemoteMetadata(libraryPayload.masterLibrary)
+                
+                // SMART PRE-FETCH ON CONNECTION:
+                // Loop through the library, find unique albums, and request art ONLY if it's missing
+                var processedAlbums: Set<String> = []
+                for song in libraryPayload.masterLibrary {
+                    let album = song.album
+                    if !processedAlbums.contains(album) {
+                        processedAlbums.insert(album)
+                        
+                        // Check if we already have it cached from a previous session
+                        if LibraryManager.shared.getCachedRemoteArtwork(albumName: album) == nil {
+                            // We don't have it, ask the Mac for it!
+                            self.sendCommand("REQUEST_ARTWORK:\(song.id)")
+                        }
+                    }
+                }
                 #endif
                 
                 if let url = libraryPayload.streamServerURL {
@@ -237,7 +486,6 @@ class MultipeerManager: NSObject, ObservableObject {
                     #if os(iOS)
                     LibraryManager.shared.saveRemoteArtwork(data: artworkPayload.artworkData, albumName: albumName)
                     #endif
-                    
                     for i in self.remoteLibrary.indices { if self.remoteLibrary[i].album == albumName { self.remoteLibrary[i].artworkData = artworkPayload.artworkData } }
                     for i in self.remoteContextQueue.indices { if self.remoteContextQueue[i].album == albumName { self.remoteContextQueue[i].artworkData = artworkPayload.artworkData } }
                 }
@@ -314,8 +562,6 @@ class MultipeerManager: NSObject, ObservableObject {
                         let serverURL = MacStreamServer.shared.start()
                         let payload = LibrarySyncPayload(masterLibrary: libraryData, streamServerURL: serverURL)
                         if let encoded = try? JSONEncoder().encode(payload) {
-                            
-                            // 👉 WRITE TO TEMP FILE AND SEND AS A RESOURCE FOR ACCURATE PROGRESS
                             let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("LIBRARY_METADATA_SYNC.json")
                             do {
                                 try encoded.write(to: tempURL)
@@ -385,435 +631,18 @@ class MultipeerManager: NSObject, ObservableObject {
             return true
         }
         
-        return false // If it gets here, it was NOT a valid JSON payload
-    }
-    
-    func processReceivedData(_ data: Data) {
-        if let payload = try? JSONDecoder().decode(PlaybackSyncPayload.self, from: data) {
-            DispatchQueue.main.async { self.latestPayload = payload; if payload.isMetadataUpdate { self.remoteArtworkData = payload.artworkData; self.remoteSyncedLyrics = payload.fullSyncedLyrics ?? [] } }
-        }
-        else if let libraryPayload = try? JSONDecoder().decode(LibrarySyncPayload.self, from: data) {
-            DispatchQueue.main.async {
-                self.remoteLibrary = libraryPayload.masterLibrary
-                
-                #if os(iOS)
-                LibraryManager.shared.saveCachedRemoteMetadata(libraryPayload.masterLibrary)
-                #endif
-                
-                if let url = libraryPayload.streamServerURL {
-                    self.macServerURL = url
-                }
-            }
-        }
-        else if let contextPayload = try? JSONDecoder().decode(ContextSyncPayload.self, from: data) {
-            DispatchQueue.main.async {
-                self.remoteContextQueue = contextPayload.contextQueue
-                if let url = contextPayload.streamServerURL {
-                    self.macServerURL = url
-                }
-            }
-        }
-        else if let artworkPayload = try? JSONDecoder().decode(ArtworkSyncPayload.self, from: data) {
-            DispatchQueue.main.async {
-                var albumName = self.remoteLibrary.first(where: { $0.id == artworkPayload.songId })?.album
-                if albumName == nil {
-                    albumName = self.remoteContextQueue.first(where: { $0.id == artworkPayload.songId })?.album
-                }
-                
-                if let albumName = albumName {
-                    #if os(iOS)
-                    LibraryManager.shared.saveRemoteArtwork(data: artworkPayload.artworkData, albumName: albumName)
-                    #endif
-                    
-                    for i in self.remoteLibrary.indices {
-                        if self.remoteLibrary[i].album == albumName { self.remoteLibrary[i].artworkData = artworkPayload.artworkData }
-                    }
-                    for i in self.remoteContextQueue.indices {
-                        if self.remoteContextQueue[i].album == albumName { self.remoteContextQueue[i].artworkData = artworkPayload.artworkData }
-                    }
-                }
-                
-                #if os(iOS)
-                if AudioManager.shared.currentRemoteDTO?.id == artworkPayload.songId || AudioManager.shared.currentRemoteDTO?.album == albumName {
-                    AudioManager.shared.currentRemoteDTO?.artworkData = artworkPayload.artworkData
-                    AudioManager.shared.updateLockScreenInfo()
-                }
-                #endif
-            }
-        }
-        else if let lyricsPayload = try? JSONDecoder().decode(StreamLyricsPayload.self, from: data) {
-            DispatchQueue.main.async {
-                #if os(iOS)
-                // 1. Save Raw Lyrics
-                if let raw = lyricsPayload.lyrics, !raw.isEmpty {
-                    LibraryManager.shared.customRawLyrics[lyricsPayload.songId] = raw
-                }
-                
-                // 2. Save Synced Lyrics
-                if let synced = lyricsPayload.syncedLyrics, !synced.isEmpty {
-                    let song = self.remoteLibrary.first(where: { $0.id == lyricsPayload.songId }) ?? self.remoteContextQueue.first(where: { $0.id == lyricsPayload.songId })
-                    if let s = song {
-                        LibraryManager.shared.saveSyncedLyrics(id: s.id, title: s.title, artist: s.artist, lines: synced)
-                    }
-                }
-                
-                // 3. Force UI Update if this is the currently playing song
-                if AudioManager.shared.currentRemoteDTO?.id == lyricsPayload.songId {
-                    let temp = AudioManager.shared.currentRemoteDTO
-                    AudioManager.shared.currentRemoteDTO = nil
-                    AudioManager.shared.currentRemoteDTO = temp
-                }
-                #endif
-            }
-        }
-        else if let colorsPayload = try? JSONDecoder().decode(AlbumColorsSyncPayload.self, from: data) {
-            DispatchQueue.main.async {
-                #if os(macOS)
-                var migratedColors: [String: [String: String]] = [:]
-                for (albumId, hex) in colorsPayload.colors {
-                    migratedColors[albumId] = ["primary": hex]
-                }
-                MacLibrary.shared.customAlbumColors = migratedColors
-                #else
-                LibraryManager.shared.customAlbumColors = colorsPayload.colors
-                #endif
-            }
-            return
-        }
-        else if let albumsPayload = try? JSONDecoder().decode(AlbumsSyncPayload.self, from: data) {
-            DispatchQueue.main.async { self.remoteAlbums = albumsPayload.albums }
-        }
-        else if let artistsPayload = try? JSONDecoder().decode(ArtistsSyncPayload.self, from: data) {
-            DispatchQueue.main.async { self.remoteArtists = artistsPayload.artists }
-        }
-        else if let syncCmd = try? JSONDecoder().decode(SyncCommand.self, from: data) {
-            DispatchQueue.main.async {
-                
-                #if os(iOS)
-                if syncCmd.command == "STOP_CASTING" {
-                    self.latestPayload?.isCasting = false
-                } else if syncCmd.command.hasPrefix("DOWNLOAD_METADATA:") {
-                    let jsonStr = syncCmd.command.replacingOccurrences(of: "DOWNLOAD_METADATA:", with: "")
-                    if let metaData = jsonStr.data(using: .utf8),
-                       let meta = try? JSONDecoder().decode(DownloadMetadataPayload.self, from: metaData) {
-                        self.currentDownloads[meta.fileName] = DownloadTask(id: meta.fileName, metadata: meta)
-                        DownloadsManager.shared.saveMetadata(meta)
-                    }
-                } else if syncCmd.command.hasPrefix("STREAM_METADATA:") {
-                    let jsonStr = syncCmd.command.replacingOccurrences(of: "STREAM_METADATA:", with: "")
-                    if let metaData = jsonStr.data(using: .utf8),
-                       let meta = try? JSONDecoder().decode(DownloadMetadataPayload.self, from: metaData) {
-                        AudioManager.shared.tempMetadataCache[meta.fileName] = meta
-                    }
-                } else if syncCmd.command.hasPrefix("DOWNLOAD_ERROR:") {
-                    self.downloadMessage = syncCmd.command.replacingOccurrences(of: "DOWNLOAD_ERROR:", with: "")
-                    self.showDownloadAlert = true
-                }
-                
-                #elseif os(macOS)
-                if syncCmd.command == "REQUEST_LIBRARY" {
-                    if let libraryData = self.onRequestLibrary?() {
-                        let serverURL = MacStreamServer.shared.start()
-                        let payload = LibrarySyncPayload(masterLibrary: libraryData, streamServerURL: serverURL)
-                        if let encoded = try? JSONEncoder().encode(payload) { self.sendDataToPeers(encoded) }
-                    }
-                } else if syncCmd.command == "REQUEST_ALL_ALBUMS" {
-                    if let albums = self.onRequestAlbums?() {
-                        let payload = AlbumsSyncPayload(albums: albums)
-                        if let encoded = try? JSONEncoder().encode(payload) { self.sendDataToPeers(encoded) }
-                    }
-                } else if syncCmd.command == "REQUEST_ALL_ARTISTS" {
-                    if let artists = self.onRequestArtists?() {
-                        let payload = ArtistsSyncPayload(artists: artists)
-                        if let encoded = try? JSONEncoder().encode(payload) { self.sendDataToPeers(encoded) }
-                    }
-                } else if syncCmd.command.hasPrefix("REQUEST_ALBUM_SONGS:") {
-                    let album = syncCmd.command.replacingOccurrences(of: "REQUEST_ALBUM_SONGS:", with: "")
-                    if let songs = self.onRequestSongsForAlbum?(album) {
-                        let serverURL = MacStreamServer.shared.start()
-                        let payload = ContextSyncPayload(contextQueue: songs, streamServerURL: serverURL)
-                        if let encoded = try? JSONEncoder().encode(payload) { self.sendDataToPeers(encoded) }
-                    }
-                } else if syncCmd.command.hasPrefix("REQUEST_ARTIST_SONGS:") {
-                    let artist = syncCmd.command.replacingOccurrences(of: "REQUEST_ARTIST_SONGS:", with: "")
-                    if let songs = self.onRequestSongsForArtist?(artist) {
-                        let serverURL = MacStreamServer.shared.start()
-                        let payload = ContextSyncPayload(contextQueue: songs, streamServerURL: serverURL)
-                        if let encoded = try? JSONEncoder().encode(payload) { self.sendDataToPeers(encoded) }
-                    }
-                } else if syncCmd.command.hasPrefix("REQUEST_ARTWORK:") {
-                    self.onRequestArtwork?(syncCmd.command.replacingOccurrences(of: "REQUEST_ARTWORK:", with: ""))
-                } else if syncCmd.command.hasPrefix("REQUEST_LYRICS:") {
-                    let songId = syncCmd.command.replacingOccurrences(of: "REQUEST_LYRICS:", with: "")
-                    self.onRequestLyrics?(songId)
-                    
-                    // Instantly process and send it back to the iPhone
-                    if let song = MacLibrary.shared.songs.first(where: { $0.id == songId }) {
-                        let synced = MacLibrary.shared.syncedLyrics[songId]?.lines
-                        let payload = StreamLyricsPayload(songId: songId, lyrics: song.lyrics, syncedLyrics: synced)
-                        if let encoded = try? JSONEncoder().encode(payload) {
-                            self.sendDataToPeers(encoded)
-                        }
-                    }
-                } else if syncCmd.command.hasPrefix("PLAY_SONG:") {
-                    self.onPlayRequestedSong?(syncCmd.command.replacingOccurrences(of: "PLAY_SONG:", with: ""))
-                } else if syncCmd.command.hasPrefix("DOWNLOAD_SONG:") {
-                    self.onDownloadRequestedSong?(syncCmd.command.replacingOccurrences(of: "DOWNLOAD_SONG:", with: ""))
-                } else if syncCmd.command.hasPrefix("STREAM_SONG:") {
-                    self.onStreamRequestedSong?(syncCmd.command.replacingOccurrences(of: "STREAM_SONG:", with: ""))
-                }
-                #endif
-            }
-        }
-        if let settingsPayload = try? JSONDecoder().decode(AlbumSettingsSyncPayload.self, from: data) {
-            DispatchQueue.main.async {
-                #if os(macOS)
-                // Save to Mac's local storage
-                MacLibrary.shared.saveAlbumSettings(
-                    albumId: settingsPayload.albumId,
-                    colors: settingsPayload.colors,
-                    transform: settingsPayload.transform
-                )
-                #else
-                // Save to iPhone's local storage
-                LibraryManager.shared.saveAlbumSettings(
-                    albumId: settingsPayload.albumId,
-                    colors: settingsPayload.colors,
-                    transform: settingsPayload.transform
-                )
-                #endif
-            }
-            return
-        }
-    }
-    
-    func processReceivedData(_ data: Data) {
-        if let payload = try? JSONDecoder().decode(PlaybackSyncPayload.self, from: data) {
-            DispatchQueue.main.async { self.latestPayload = payload; if payload.isMetadataUpdate { self.remoteArtworkData = payload.artworkData; self.remoteSyncedLyrics = payload.fullSyncedLyrics ?? [] } }
-        }
-        // CHANGED: Listens for unique masterLibrary variable
-        else if let libraryPayload = try? JSONDecoder().decode(LibrarySyncPayload.self, from: data) {
-            DispatchQueue.main.async {
-                self.remoteLibrary = libraryPayload.masterLibrary
-                
-                // 👉 Wrap the iOS-only save function
-                #if os(iOS)
-                LibraryManager.shared.saveCachedRemoteMetadata(libraryPayload.masterLibrary)
-                
-                // 👉 ADDED FIX: Request missing artwork for all cached remote albums
-                let grouped = Dictionary(grouping: libraryPayload.masterLibrary, by: { $0.album })
-                for (albumName, songs) in grouped {
-                    if LibraryManager.shared.getCachedRemoteArtwork(albumName: albumName) == nil {
-                        if let firstSong = songs.first {
-                            self.sendCommand("REQUEST_ARTWORK:\(firstSong.id)")
-                        }
-                    }
-                }
-                #endif
-                
-                if let url = libraryPayload.streamServerURL {
-                    self.macServerURL = url
-                }
-            }
-        }
-        // CHANGED: Listens for unique contextQueue variable
-        else if let contextPayload = try? JSONDecoder().decode(ContextSyncPayload.self, from: data) {
-            DispatchQueue.main.async {
-                self.remoteContextQueue = contextPayload.contextQueue
-                if let url = contextPayload.streamServerURL {
-                    self.macServerURL = url
-                }
-            }
-        }
-        else if let artworkPayload = try? JSONDecoder().decode(ArtworkSyncPayload.self, from: data) {
-            DispatchQueue.main.async {
-                var albumName = self.remoteLibrary.first(where: { $0.id == artworkPayload.songId })?.album
-                if albumName == nil {
-                    albumName = self.remoteContextQueue.first(where: { $0.id == artworkPayload.songId })?.album
-                }
-                
-                if let albumName = albumName {
-                    
-                    // 👉 Wrap the iOS-only save function
-                    #if os(iOS)
-                    LibraryManager.shared.saveRemoteArtwork(data: artworkPayload.artworkData, albumName: albumName)
-                    #endif
-                    
-                    for i in self.remoteLibrary.indices {
-                        if self.remoteLibrary[i].album == albumName { self.remoteLibrary[i].artworkData = artworkPayload.artworkData }
-                    }
-                    for i in self.remoteContextQueue.indices {
-                        if self.remoteContextQueue[i].album == albumName { self.remoteContextQueue[i].artworkData = artworkPayload.artworkData }
-                    }
-                }
-                
-                #if os(iOS)
-                if AudioManager.shared.currentRemoteDTO?.id == artworkPayload.songId || AudioManager.shared.currentRemoteDTO?.album == albumName {
-                    AudioManager.shared.currentRemoteDTO?.artworkData = artworkPayload.artworkData
-                    AudioManager.shared.updateLockScreenInfo()
-                }
-                #endif
-            }
-        }
-        else if let lyricsPayload = try? JSONDecoder().decode(StreamLyricsPayload.self, from: data) {
-            DispatchQueue.main.async {
-                #if os(iOS)
-                // 1. Save Raw Lyrics
-                if let raw = lyricsPayload.lyrics, !raw.isEmpty {
-                    LibraryManager.shared.customRawLyrics[lyricsPayload.songId] = raw
-                }
-                
-                // 2. Save Synced Lyrics
-                if let synced = lyricsPayload.syncedLyrics, !synced.isEmpty {
-                    let song = self.remoteLibrary.first(where: { $0.id == lyricsPayload.songId }) ?? self.remoteContextQueue.first(where: { $0.id == lyricsPayload.songId })
-                    if let s = song {
-                        LibraryManager.shared.saveSyncedLyrics(id: s.id, title: s.title, artist: s.artist, lines: synced)
-                    }
-                }
-                
-                // 3. Force UI Update if this is the currently playing song
-                if AudioManager.shared.currentRemoteDTO?.id == lyricsPayload.songId {
-                    let temp = AudioManager.shared.currentRemoteDTO
-                    AudioManager.shared.currentRemoteDTO = nil
-                    AudioManager.shared.currentRemoteDTO = temp
-                }
-                #endif
-            }
-        }
-        else if let colorsPayload = try? JSONDecoder().decode(AlbumColorsSyncPayload.self, from: data) {
-            DispatchQueue.main.async {
-                #if os(macOS)
-                // Migrate the iPhone's flat dictionary into the Mac's nested dictionary
-                var migratedColors: [String: [String: String]] = [:]
-                for (albumId, hex) in colorsPayload.colors {
-                    migratedColors[albumId] = ["primary": hex]
-                }
-                MacLibrary.shared.customAlbumColors = migratedColors
-                #else
-                LibraryManager.shared.customAlbumColors = colorsPayload.colors
-                #endif
-            }
-            return
-        }
-        else if let albumsPayload = try? JSONDecoder().decode(AlbumsSyncPayload.self, from: data) {
-            DispatchQueue.main.async { self.remoteAlbums = albumsPayload.albums }
-        }
-        else if let artistsPayload = try? JSONDecoder().decode(ArtistsSyncPayload.self, from: data) {
-            DispatchQueue.main.async { self.remoteArtists = artistsPayload.artists }
-        }
-        else if let syncCmd = try? JSONDecoder().decode(SyncCommand.self, from: data) {
-            DispatchQueue.main.async {
-                
-                #if os(iOS)
-                if syncCmd.command == "STOP_CASTING" {
-                    self.latestPayload?.isCasting = false
-                } else if syncCmd.command.hasPrefix("DOWNLOAD_METADATA:") {
-                    let jsonStr = syncCmd.command.replacingOccurrences(of: "DOWNLOAD_METADATA:", with: "")
-                    if let metaData = jsonStr.data(using: .utf8),
-                       let meta = try? JSONDecoder().decode(DownloadMetadataPayload.self, from: metaData) {
-                        self.currentDownloads[meta.fileName] = DownloadTask(id: meta.fileName, metadata: meta)
-                        DownloadsManager.shared.saveMetadata(meta)
-                    }
-                } else if syncCmd.command.hasPrefix("STREAM_METADATA:") {
-                    let jsonStr = syncCmd.command.replacingOccurrences(of: "STREAM_METADATA:", with: "")
-                    if let metaData = jsonStr.data(using: .utf8),
-                       let meta = try? JSONDecoder().decode(DownloadMetadataPayload.self, from: metaData) {
-                        AudioManager.shared.tempMetadataCache[meta.fileName] = meta
-                    }
-                } else if syncCmd.command.hasPrefix("DOWNLOAD_ERROR:") {
-                    self.downloadMessage = syncCmd.command.replacingOccurrences(of: "DOWNLOAD_ERROR:", with: "")
-                    self.showDownloadAlert = true
-                }
-                
-                #elseif os(macOS)
-                if syncCmd.command == "REQUEST_LIBRARY" {
-                    if let libraryData = self.onRequestLibrary?() {
-                        let serverURL = MacStreamServer.shared.start()
-                        let payload = LibrarySyncPayload(masterLibrary: libraryData, streamServerURL: serverURL)
-                        if let encoded = try? JSONEncoder().encode(payload) { self.sendDataToPeers(encoded) }
-                    }
-                } else if syncCmd.command == "REQUEST_ALL_ALBUMS" {
-                    if let albums = self.onRequestAlbums?() {
-                        let payload = AlbumsSyncPayload(albums: albums)
-                        if let encoded = try? JSONEncoder().encode(payload) { self.sendDataToPeers(encoded) }
-                    }
-                } else if syncCmd.command == "REQUEST_ALL_ARTISTS" {
-                    if let artists = self.onRequestArtists?() {
-                        let payload = ArtistsSyncPayload(artists: artists)
-                        if let encoded = try? JSONEncoder().encode(payload) { self.sendDataToPeers(encoded) }
-                    }
-                } else if syncCmd.command.hasPrefix("REQUEST_ALBUM_SONGS:") {
-                    let album = syncCmd.command.replacingOccurrences(of: "REQUEST_ALBUM_SONGS:", with: "")
-                    if let songs = self.onRequestSongsForAlbum?(album) {
-                        let serverURL = MacStreamServer.shared.start()
-                        let payload = ContextSyncPayload(contextQueue: songs, streamServerURL: serverURL)
-                        if let encoded = try? JSONEncoder().encode(payload) { self.sendDataToPeers(encoded) }
-                    }
-                } else if syncCmd.command.hasPrefix("REQUEST_ARTIST_SONGS:") {
-                    let artist = syncCmd.command.replacingOccurrences(of: "REQUEST_ARTIST_SONGS:", with: "")
-                    if let songs = self.onRequestSongsForArtist?(artist) {
-                        let serverURL = MacStreamServer.shared.start()
-                        let payload = ContextSyncPayload(contextQueue: songs, streamServerURL: serverURL)
-                        if let encoded = try? JSONEncoder().encode(payload) { self.sendDataToPeers(encoded) }
-                    }
-                } else if syncCmd.command.hasPrefix("REQUEST_ARTWORK:") {
-                    self.onRequestArtwork?(syncCmd.command.replacingOccurrences(of: "REQUEST_ARTWORK:", with: ""))
-                } else if syncCmd.command.hasPrefix("REQUEST_LYRICS:") {
-                    let songId = syncCmd.command.replacingOccurrences(of: "REQUEST_LYRICS:", with: "")
-                    self.onRequestLyrics?(songId)
-                    
-                    // Instantly process and send it back to the iPhone
-                    if let song = MacLibrary.shared.songs.first(where: { $0.id == songId }) {
-                        let synced = MacLibrary.shared.syncedLyrics[songId]?.lines
-                        let payload = StreamLyricsPayload(songId: songId, lyrics: song.lyrics, syncedLyrics: synced)
-                        if let encoded = try? JSONEncoder().encode(payload) {
-                            self.sendDataToPeers(encoded)
-                        }
-                    }
-                } else if syncCmd.command.hasPrefix("PLAY_SONG:") {
-                    self.onPlayRequestedSong?(syncCmd.command.replacingOccurrences(of: "PLAY_SONG:", with: ""))
-                } else if syncCmd.command.hasPrefix("DOWNLOAD_SONG:") {
-                    self.onDownloadRequestedSong?(syncCmd.command.replacingOccurrences(of: "DOWNLOAD_SONG:", with: ""))
-                } else if syncCmd.command.hasPrefix("STREAM_SONG:") {
-                    self.onStreamRequestedSong?(syncCmd.command.replacingOccurrences(of: "STREAM_SONG:", with: ""))
-                }
-                #endif
-            }
-        }
-        if let settingsPayload = try? JSONDecoder().decode(AlbumSettingsSyncPayload.self, from: data) {
-            DispatchQueue.main.async {
-                #if os(macOS)
-                // Save to Mac's local storage
-                MacLibrary.shared.saveAlbumSettings(
-                    albumId: settingsPayload.albumId,
-                    colors: settingsPayload.colors,
-                    transform: settingsPayload.transform
-                )
-                #else
-                // Save to iPhone's local storage (Assuming you have a save function in LibraryManager)
-                LibraryManager.shared.saveAlbumSettings(
-                    albumId: settingsPayload.albumId,
-                    colors: settingsPayload.colors,
-                    transform: settingsPayload.transform
-                )
-                #endif
-            }
-            return
-        }
+        return false // Not valid JSON
     }
     
     func session(_ session: MCSession, didStartReceivingResourceWithName resourceName: String, fromPeer peerID: MCPeerID, with progress: Progress) {
         DispatchQueue.main.async {
-            // 👉 INTERCEPT THE LIBRARY SYNC TO POWER THE PROGRESS BAR
             if resourceName == "LIBRARY_METADATA_SYNC" {
                 self.isSyncingLibrary = true
                 self.librarySyncProgress = 0.0
                 self.librarySyncObservation = progress.observe(\.fractionCompleted, options: [.initial, .new]) { [weak self] p, _ in
-                    DispatchQueue.main.async {
-                        self?.librarySyncProgress = p.fractionCompleted
-                    }
+                    DispatchQueue.main.async { self?.librarySyncProgress = p.fractionCompleted }
                 }
-                return // Stop here so it doesn't show up in the Download Queue sheet
+                return
             }
             
             if self.currentDownloads[resourceName] == nil {
@@ -824,14 +653,10 @@ class MultipeerManager: NSObject, ObservableObject {
     }
     
     func session(_ session: MCSession, didFinishReceivingResourceWithName resourceName: String, fromPeer peerID: MCPeerID, at localURL: URL?, withError error: (any Error)?) {
-            
-        // 1. 👉 Unwrap the URL at the very top so ALL your code below can see it
         guard let tempURL = localURL else { return }
         
         #if os(iOS)
         DispatchQueue.main.async {
-            
-            // 2. Intercept the Library Sync
             if resourceName == "LIBRARY_METADATA_SYNC" {
                 self.isSyncingLibrary = false
                 self.librarySyncObservation?.invalidate()
@@ -839,17 +664,12 @@ class MultipeerManager: NSObject, ObservableObject {
                 
                 if error == nil {
                     if let data = try? Data(contentsOf: tempURL) {
-                        
-                        // 3. 👉 Fix the ambiguity by explicitly forcing Swift to use the Void function
-                        let processVoidVersion: (Data) -> Void = self.processReceivedData
-                        processVoidVersion(data)
-                        
+                        self.processReceivedData(data)
                     }
                 }
                 
-                // Clean up the temp metadata file
                 try? FileManager.default.removeItem(at: tempURL)
-                return // Stop here so it doesn't go into your actual song download queue below
+                return
             }
             
             let fileManager = FileManager.default
@@ -861,7 +681,6 @@ class MultipeerManager: NSObject, ObservableObject {
                     if fileManager.fileExists(atPath: destinationURL.path) { try fileManager.removeItem(at: destinationURL) }
                     try fileManager.moveItem(at: tempURL, to: destinationURL)
                     try fileManager.setAttributes([.protectionKey: FileProtectionType.none], ofItemAtPath: destinationURL.path)
-                    
                     AudioManager.shared.handleStreamFileReady(fileName: actualFileName, url: destinationURL)
                 } catch {
                     print("Stream save error: \(error)")

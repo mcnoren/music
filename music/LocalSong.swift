@@ -10,7 +10,7 @@ import Combine
 // MARK: - Models
 struct LocalSong: Identifiable, Codable, Hashable {
     let id: String
-    let url: URL
+    var url: URL // CHANGED TO VAR: We must update this on launch because iOS Sandbox paths change dynamically!
     var title: String
     var artist: String
     var album: String
@@ -32,12 +32,48 @@ class DownloadsManager: ObservableObject {
     @Published var isImporting: Bool = false
     
     private let metadataKey = "LocalDownloadsMetadataKey"
+    
+    // NEW: The location of our Instant Cache file
+    private var cacheURL: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("DownloadsFastCache.json")
+    }
 
     init() {
-        loadDownloads()
+        loadFastCache() // 1. INSTANTLY load the UI from the JSON cache
+        loadDownloads() // 2. Check the file system in the background for new files
         NotificationCenter.default.addObserver(self, selector: #selector(loadDownloads), name: NSNotification.Name("NewDownloadComplete"), object: nil)
     }
     
+    // MARK: - Fast Caching Logic
+    private func saveCache(songs: [LocalSong]) {
+        // Run on a background thread so massive artwork data doesn't freeze the UI while encoding
+        Task.detached {
+            if let data = try? JSONEncoder().encode(songs) {
+                try? data.write(to: self.cacheURL)
+            }
+        }
+    }
+    
+    private func loadFastCache() {
+        if let data = try? Data(contentsOf: cacheURL),
+           var cachedSongs = try? JSONDecoder().decode([LocalSong].self, from: data) {
+            
+            let docsDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            
+            // VITAL: Reconstruct the URLs because the iOS App Sandbox UUID changes every time you launch the app!
+            for i in 0..<cachedSongs.count {
+                let fileName = cachedSongs[i].url.lastPathComponent
+                cachedSongs[i].url = docsDir.appendingPathComponent(fileName)
+            }
+            
+            DispatchQueue.main.async {
+                self.downloadedSongs = cachedSongs
+                LibraryManager.shared.loadPinnedAlbums()
+            }
+        }
+    }
+    
+    // MARK: - Metadata
     func saveMetadata(_ payload: DownloadMetadataPayload) {
         var allMeta = getSavedMetadata()
         allMeta[payload.fileName] = payload
@@ -45,7 +81,6 @@ class DownloadsManager: ObservableObject {
             UserDefaults.standard.set(encoded, forKey: metadataKey)
         }
         
-        // Inject downloaded settings directly into the iPhone's library state
         DispatchQueue.main.async {
             if payload.albumColors != nil || payload.albumTransform != nil {
                 LibraryManager.shared.saveAlbumSettings(
@@ -68,7 +103,6 @@ class DownloadsManager: ObservableObject {
     func saveSyncedLyrics(for songId: String, lines: [SyncedLyricLine]) {
         guard let song = downloadedSongs.first(where: { $0.id == songId }) else { return }
         
-        // 1. Save to the universal Library database so it syncs to the Mac and survives file deletion
         LibraryManager.shared.saveSyncedLyrics(
             id: songId,
             title: song.title,
@@ -76,38 +110,64 @@ class DownloadsManager: ObservableObject {
             lines: lines
         )
         
-        // 2. Update the live models so the UI refreshes instantly
         DispatchQueue.main.async {
             if let index = self.downloadedSongs.firstIndex(where: { $0.id == songId }) {
                 self.downloadedSongs[index].syncedLyrics = lines
             }
-            // If it's currently playing, update the active Audio Manager cache too
             if AudioManager.shared.currentLocalSong?.id == songId {
                 AudioManager.shared.currentLocalSong?.syncedLyrics = lines
             }
+            
+            // Save the updated lyrics to the instant cache
+            self.saveCache(songs: self.downloadedSongs)
             LibraryManager.shared.loadPinnedAlbums()
         }
     }
 
+    // MARK: - Background File Scanner
     @objc func loadDownloads() {
-        // FIX: Detach this completely from the Main Actor to prevent any UI buffering
         Task.detached { [weak self] in
             guard let self = self else { return }
             let fileManager = FileManager.default
             guard let documents = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
             let savedMeta = self.getSavedMetadata()
             
+            // Grab our currently loaded cache so we know what to skip
+            let currentSongs = await MainActor.run { self.downloadedSongs }
+            var existingSongsMap: [String: LocalSong] = [:]
+            for song in currentSongs {
+                existingSongsMap[song.url.lastPathComponent] = song
+            }
+            
             do {
                 let files = try fileManager.contentsOfDirectory(at: documents, includingPropertiesForKeys: nil)
-                let audioFiles = files.filter { ["mp3", "m4a", "wav", "aac"].contains($0.pathExtension.lowercased()) }
+                let audioFiles = files.filter { ["mp3", "m4a", "wav", "aac", "flac"].contains($0.pathExtension.lowercased()) }
                 
-                var songs: [LocalSong] = []
+                var newSongsList: [LocalSong] = []
+                var cacheUpdated = false
                 
                 for url in audioFiles {
-                    // Retroactively fix the encryption lock on files you've already downloaded
-                    try? fileManager.setAttributes([.protectionKey: FileProtectionType.none], ofItemAtPath: url.path)
-                    let asset = AVAsset(url: url)
                     let fileName = url.lastPathComponent
+                    try? fileManager.setAttributes([.protectionKey: FileProtectionType.none], ofItemAtPath: url.path)
+                    
+                    // IF WE ALREADY HAVE THIS FILE CACHED, SKIP THE HEAVY AVASSET PARSING!
+                    if var existingSong = existingSongsMap[fileName] {
+                        existingSong.url = url // Ensure URL is fresh for this launch
+                        
+                        // Just double check if new lyrics came in over the network
+                        let synced = LibraryManager.shared.syncedLyrics[fileName]?.lines ?? savedMeta[fileName]?.syncedLyrics
+                        if existingSong.syncedLyrics != synced {
+                            existingSong.syncedLyrics = synced
+                            cacheUpdated = true
+                        }
+                        
+                        newSongsList.append(existingSong)
+                        continue
+                    }
+                    
+                    // IF WE DONT HAVE IT, RUN THE HEAVY PARSER (For brand new downloads)
+                    cacheUpdated = true
+                    let asset = AVAsset(url: url)
                     let meta = savedMeta[fileName]
                     
                     var title = meta?.title ?? url.deletingPathExtension().lastPathComponent
@@ -123,7 +183,6 @@ class DownloadsManager: ObservableObject {
                     
                     if let dur = try? await asset.load(.duration) { duration = dur.seconds }
                     
-                    // 1. Common Metadata
                     if let metadata = try? await asset.load(.commonMetadata) {
                         for item in metadata {
                             if meta == nil {
@@ -131,12 +190,11 @@ class DownloadsManager: ObservableObject {
                                 if item.commonKey?.rawValue == "artist" { artist = try await item.load(.stringValue) ?? artist }
                                 if item.commonKey?.rawValue == "albumName" { album = try await item.load(.stringValue) ?? album }
                             }
-                            if item.commonKey?.rawValue == "type" { genre = try await item.load(.stringValue) ?? genre } // NEW: Extracts Genre
+                            if item.commonKey?.rawValue == "type" { genre = try await item.load(.stringValue) ?? genre }
                             if item.commonKey?.rawValue == "artwork" { artworkData = try await item.load(.dataValue) }
                         }
                     }
 
-                    // 2. NEW: Deep Dive for Track Numbers
                     if let formats = try? await asset.load(.availableMetadataFormats) {
                         for format in formats {
                             if let metadata = try? await asset.loadMetadata(for: format) {
@@ -170,15 +228,18 @@ class DownloadsManager: ObservableObject {
                         }
                     }
 
-                    songs.append(LocalSong(id: fileName, url: url, title: title, artist: artist, album: album, duration: duration, artworkData: artworkData, trackNumber: trackNumber, discNumber: discNumber, genre: genre, lyrics: lyrics, syncedLyrics: syncedLyrics))
+                    newSongsList.append(LocalSong(id: fileName, url: url, title: title, artist: artist, album: album, duration: duration, artworkData: artworkData, trackNumber: trackNumber, discNumber: discNumber, genre: genre, lyrics: lyrics, syncedLyrics: syncedLyrics))
                 }
                 
-                let sortedSongs = songs.sorted { $0.title < $1.title }
+                let sortedSongs = newSongsList.sorted { $0.title < $1.title }
                 
-                // Hop back to the main thread ONLY to update the UI variables
-                DispatchQueue.main.async {
-                    self.downloadedSongs = sortedSongs
-                    LibraryManager.shared.loadPinnedAlbums()
+                // Only write to memory and update UI if something actually changed/downloaded
+                if cacheUpdated || sortedSongs.count != existingSongsMap.count {
+                    self.saveCache(songs: sortedSongs)
+                    DispatchQueue.main.async {
+                        self.downloadedSongs = sortedSongs
+                        LibraryManager.shared.loadPinnedAlbums()
+                    }
                 }
             } catch {
                 print("Error loading downloads: \(error)")
@@ -202,6 +263,8 @@ class DownloadsManager: ObservableObject {
             
             DispatchQueue.main.async {
                 self.downloadedSongs.removeAll { $0.id == song.id }
+                self.saveCache(songs: self.downloadedSongs) // Update cache
+                
                 if AudioManager.shared.currentLocalSong?.id == song.id && AudioManager.shared.isPlaying {
                     AudioManager.shared.togglePlayPause()
                 }
@@ -237,7 +300,6 @@ struct LocalArtistSection: Identifiable {
 
 // MARK: - Main Tab View
 struct DownloadsView: View {
-    // FIX: Changed to ObservedObject to prevent memory allocation freezes during tab switches
     @ObservedObject var downloads = DownloadsManager.shared
     @State private var navPath = NavigationPath()
     
@@ -329,7 +391,6 @@ struct DownloadsSongListView: View {
     }
     
     var body: some View {
-        // NEW: Flatten all the sections into a single queue array
         let currentQueue = activeSections.flatMap { $0.songs }
         
         ZStack {
@@ -398,13 +459,8 @@ struct DownloadsAlbumListView: View {
                             }
                         }
                     }
-                    // NEW: Long press on the album cover to delete it
                     .contextMenu {
-                        Button(role: .destructive) {
-                            DownloadsManager.shared.deleteAlbum(albumName: albumName)
-                        } label: {
-                            Label("Delete", systemImage: "trash")
-                        }
+                        Button(role: .destructive) { DownloadsManager.shared.deleteAlbum(albumName: albumName) } label: { Label("Delete", systemImage: "trash") }
                     }
                 }
             }
@@ -479,7 +535,6 @@ struct DownloadsArtistDetailView: View {
     let artistName: String
     let songs: [LocalSong]
     
-    // Compute current active songs dynamically in case some are deleted
     @ObservedObject var downloads = DownloadsManager.shared
     var activeSongs: [LocalSong] {
         downloads.downloadedSongs
@@ -508,7 +563,6 @@ struct DownloadsArtistDetailView: View {
             }
         }
         .navigationTitle(artistName)
-        // Pop back if the user deletes the last song for this artist
         .onChange(of: activeSongs) { newSongs in
             if newSongs.isEmpty {
                 dismiss()
@@ -523,20 +577,18 @@ struct DownloadsSongRow: View {
     let song: LocalSong
     var queue: [LocalSong] = []
     var showArtwork: Bool = true
-    var showTrackNumber: Bool = false // Ensure default is false!
+    var showTrackNumber: Bool = false
     
     var customPrimaryColor: Color? = nil
     var customSecondaryColor: Color? = nil
     var showArtist: Bool = true
     
     @ObservedObject var audioManager = AudioManager.shared
-    // 1. ADD THE LIBRARY MANAGER
     @ObservedObject var library = LibraryManager.shared
     
     @State private var dominantColor: Color = .clear
     var isPlaying: Bool { audioManager.currentLocalSong?.id == song.id }
     
-    // --- 2. ADD COMPUTED PROPERTIES FOR LYRICS ---
     var hasSynced: Bool {
         let lines = song.syncedLyrics ?? library.getSyncedLyrics(id: song.id, title: song.title, artist: song.artist)
         return lines?.isFullySynced == true
@@ -550,7 +602,6 @@ struct DownloadsSongRow: View {
     var showUnfilledBubble: Bool {
         return hasCustomRaw || hasNativeRaw
     }
-    // ---------------------------------------------
     
     var body: some View {
         ZStack {
@@ -560,11 +611,9 @@ struct DownloadsSongRow: View {
                     .onChange(of: isPlaying) { playing in if playing { updateColor() } }
             }
             
-            HStack(spacing: 6) { // Strict 6px spacing to match SongRow
-                // 1. Reserved Star Space (Locals don't have this yet, but we must leave space!)
+            HStack(spacing: 6) {
                 Color.clear.frame(width: 12)
                 
-                // --- 3. UPDATE THE LYRIC SPACE ---
                 if hasSynced {
                     Image(systemName: "quote.bubble.fill").font(.caption2).foregroundColor(.pink).frame(width: 12)
                 } else if showUnfilledBubble {
@@ -572,9 +621,7 @@ struct DownloadsSongRow: View {
                 } else {
                     Color.clear.frame(width: 12)
                 }
-                // ---------------------------------
                 
-                // 3. Reserved Track Number Space
                 if showTrackNumber {
                     if song.trackNumber > 0 {
                         Text("\(song.trackNumber)").font(.caption).monospacedDigit().foregroundColor(.gray).frame(width: 20, alignment: .trailing)
@@ -583,7 +630,6 @@ struct DownloadsSongRow: View {
                     }
                 }
                 
-                // 4. Artwork
                 if showArtwork {
                     if let data = song.artworkData, let uiImage = UIImage(data: data) {
                         Image(uiImage: uiImage).resizable().aspectRatio(contentMode: .fit).frame(width: 40, height: 40).cornerRadius(5)
@@ -607,12 +653,11 @@ struct DownloadsSongRow: View {
                             .lineLimit(1)
                     }
                 }
-                // This forces the text block to maintain its height even if artist is hidden
                 .frame(minHeight: 36, alignment: .center)
                 Spacer()
                 
                 Menu { DownloadsSongMenuContent(song: song) } label: {
-                    Image(systemName: "ellipsis").font(.title3).foregroundColor(.pink).frame(width: 30, height: 30).contentShape(Rectangle()) // Pink ellipsis
+                    Image(systemName: "ellipsis").font(.title3).foregroundColor(.pink).frame(width: 30, height: 30).contentShape(Rectangle())
                 }
                 .highPriorityGesture(TapGesture())
             }
@@ -643,9 +688,7 @@ struct DownloadsSongMenuContent: View {
     
     var body: some View {
         Section {
-            Button {
-                NotificationCenter.default.post(name: NSNotification.Name("ShowAddToPlaylist"), object: ["local_\(song.id)"])
-            } label: { Label("Add to Playlist...", systemImage: "text.badge.plus") }
+            Button { NotificationCenter.default.post(name: NSNotification.Name("ShowAddToPlaylist"), object: ["local_\(song.id)"]) } label: { Label("Add to Playlist...", systemImage: "text.badge.plus") }
         }
         Section {
             Button(role: .destructive) { DownloadsManager.shared.deleteSong(song) } label: { Label("Delete", systemImage: "trash") }
@@ -659,13 +702,11 @@ import AVFoundation
 extension DownloadsManager {
     
     func importExternalURL(_ url: URL) async {
-        // Now this method runs on the MainActor, allowing safe state updates
         self.isImporting = true
-        
         let hasAccess = url.startAccessingSecurityScopedResource()
         defer {
             if hasAccess { url.stopAccessingSecurityScopedResource() }
-            self.isImporting = false // Safe now!
+            self.isImporting = false
         }
         
         let fileManager = FileManager.default
@@ -689,22 +730,17 @@ extension DownloadsManager {
         let paths = fileManager.urls(for: .documentDirectory, in: .userDomainMask)
         let documentsDirectory = paths[0]
         
-        // Ensure it's an audio file by checking extension
         let validExtensions = ["mp3", "m4a", "wav", "aac", "flac"]
         guard validExtensions.contains(sourceURL.pathExtension.lowercased()) else { return }
         
         let destinationURL = documentsDirectory.appendingPathComponent(sourceURL.lastPathComponent)
         
         do {
-            // If the file already exists in our app, remove it to overwrite
             if fileManager.fileExists(atPath: destinationURL.path) {
                 try fileManager.removeItem(at: destinationURL)
             }
-            
-            // Copy the file securely into our app's sandbox
             try fileManager.copyItem(at: sourceURL, to: destinationURL)
             
-            // Parse the metadata using AVAsset
             if let newSong = await parseLocalAudioFile(url: destinationURL) {
                 DispatchQueue.main.async {
                     if let index = self.downloadedSongs.firstIndex(where: { $0.id == newSong.id }) {
@@ -712,6 +748,7 @@ extension DownloadsManager {
                     } else {
                         self.downloadedSongs.append(newSong)
                     }
+                    self.saveCache(songs: self.downloadedSongs) // Update cache instantly
                     LibraryManager.shared.loadPinnedAlbums()
                 }
             }
@@ -720,7 +757,6 @@ extension DownloadsManager {
         }
     }
     
-    // An aggressive metadata parser similar to your MacLibrary implementation
     private func parseLocalAudioFile(url: URL) async -> LocalSong? {
         let asset = AVAsset(url: url)
         guard let isPlayable = try? await asset.load(.isPlayable), isPlayable else { return nil }
@@ -749,12 +785,8 @@ extension DownloadsManager {
             }
         }
         
-        // Fallback for native lyrics
-        if let nativeLyrics = try? await asset.load(.lyrics), !nativeLyrics.isEmpty {
-            lyrics = nativeLyrics
-        }
+        if let nativeLyrics = try? await asset.load(.lyrics), !nativeLyrics.isEmpty { lyrics = nativeLyrics }
         
-        // Deeper dive for track and disc numbers
         if let formats = try? await asset.load(.availableMetadataFormats) {
             for format in formats {
                 if let metadata = try? await asset.loadMetadata(for: format) {
@@ -788,20 +820,9 @@ extension DownloadsManager {
             }
         }
         
-        let stableID = "\(title)-\(artist)".lowercased().replacingOccurrences(of: " ", with: "")
+        // FIX: Bound the ID strictly to the filename so deletion and updating map perfectly
+        let stableID = url.lastPathComponent
         
-        return LocalSong(
-            id: stableID,
-            url: url,
-            title: title,
-            artist: artist,
-            album: album,
-            duration: duration,
-            artworkData: artworkData,
-            trackNumber: trackNumber,
-            discNumber: discNumber,
-            genre: genre,
-            lyrics: lyrics
-        )
+        return LocalSong(id: stableID, url: url, title: title, artist: artist, album: album, duration: duration, artworkData: artworkData, trackNumber: trackNumber, discNumber: discNumber, genre: genre, lyrics: lyrics)
     }
 }
