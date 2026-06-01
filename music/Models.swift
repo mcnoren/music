@@ -1,8 +1,24 @@
-
 import Foundation
 import MediaPlayer
 
 // MARK: - Unified Content Models
+
+struct RemoteAlbumWrapper: Identifiable, Hashable {
+    let id = UUID()
+    let name: String
+    let songs: [RemoteSongDTO]
+    func hash(into hasher: inout Hasher) { hasher.combine(name) }
+    static func == (lhs: RemoteAlbumWrapper, rhs: RemoteAlbumWrapper) -> Bool { lhs.name == rhs.name }
+}
+
+struct RemoteArtistWrapper: Identifiable, Hashable {
+    let id = UUID()
+    let name: String
+    let songs: [RemoteSongDTO]
+    func hash(into hasher: inout Hasher) { hasher.combine(name) }
+    static func == (lhs: RemoteArtistWrapper, rhs: RemoteArtistWrapper) -> Bool { lhs.name == rhs.name }
+}
+
 struct UnifiedSongItem: Identifiable {
     let id: String
     let title: String
@@ -44,6 +60,7 @@ struct UnifiedArtistItem: Identifiable, Hashable {
     let sortName: String
     let appleArtist: String?
     let localWrapper: LocalArtistWrapper?
+    var remoteWrapper: RemoteArtistWrapper? = nil
 
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
     static func == (lhs: UnifiedArtistItem, rhs: UnifiedArtistItem) -> Bool { lhs.id == rhs.id }
@@ -71,7 +88,6 @@ struct LocalArtistWrapper: Identifiable, Hashable {
     static func == (lhs: LocalArtistWrapper, rhs: LocalArtistWrapper) -> Bool { lhs.name == rhs.name }
 }
 
-// Add this anywhere in Models.swift
 struct AppPlaylist: Identifiable, Codable, Hashable {
     var id: String
     var title: String
@@ -90,46 +106,4 @@ struct UnifiedPlaylistItem: Identifiable, Hashable {
 
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
     static func == (lhs: UnifiedPlaylistItem, rhs: UnifiedPlaylistItem) -> Bool { lhs.id == rhs.id }
-}
-
-struct RemoteAlbumWrapper: Identifiable, Hashable {
-    let id = UUID()
-    let name: String
-    let songs: [RemoteSongDTO]
-    func hash(into hasher: inout Hasher) { hasher.combine(name) }
-    static func == (lhs: RemoteAlbumWrapper, rhs: RemoteAlbumWrapper) -> Bool { lhs.name == rhs.name }
-}
-
-struct RemoteArtistWrapper: Identifiable, Hashable {
-    let id = UUID()
-    let name: String
-    let songs: [RemoteSongDTO]
-    func hash(into hasher: inout Hasher) { hasher.combine(name) }
-    static func == (lhs: RemoteArtistWrapper, rhs: RemoteArtistWrapper) -> Bool { lhs.name == rhs.name }
-}
-
-// Update the existing Unified models:
-struct UnifiedAlbumItem: Identifiable, Hashable {
-    let id: String
-    let title: String
-    let artist: String
-    let sortTitle: String
-    let appleAlbum: MPMediaItemCollection?
-    let localWrapper: LocalAlbumWrapper?
-    var remoteWrapper: RemoteAlbumWrapper? = nil // Add this line
-
-    func hash(into hasher: inout Hasher) { hasher.combine(id) }
-    static func == (lhs: UnifiedAlbumItem, rhs: UnifiedAlbumItem) -> Bool { lhs.id == rhs.id }
-}
-
-struct UnifiedArtistItem: Identifiable, Hashable {
-    let id: String
-    let name: String
-    let sortName: String
-    let appleArtist: String?
-    let localWrapper: LocalArtistWrapper?
-    var remoteWrapper: RemoteArtistWrapper? = nil // Add this line
-
-    func hash(into hasher: inout Hasher) { hasher.combine(id) }
-    static func == (lhs: UnifiedArtistItem, rhs: UnifiedArtistItem) -> Bool { lhs.id == rhs.id }
 }

@@ -23,6 +23,8 @@ enum AlbumSortType: String, CaseIterable {
 enum AlbumFilterType: String, CaseIterable {
     case all = "All Albums"
     case full = "Full Albums (4+ Songs)"
+    case downloaded = "Downloaded to Device"
+    case remote = "Mac Library (Not Downloaded)"
 }
 
 // MARK: - Shared UI State (Preserves Layout Across Orientation)
@@ -778,17 +780,24 @@ struct CachedRemoteSongRow: View {
     @ObservedObject var audioManager: AudioManager
     @ObservedObject var library: LibraryManager
     
-    var isConnected: Bool {
-        return MultipeerManager.shared.connectionState == .connected
-    }
-    
     var body: some View {
         HStack(spacing: 6) {
-            // Check if audio data is actually on the phone (e.g. downloaded)
-            let isDownloaded = DownloadsManager.shared.downloadedSongs.contains(where: { $0.id == song.id })
-            let isAvailable = isConnected || isDownloaded
+            Color.clear.frame(width: 12)
             
-            // Artwork (loads from deduplicated disk storage)
+            if song.hasSyncedLyrics || library.getSyncedLyrics(id: song.id, title: song.title, artist: song.artist) != nil {
+                Image(systemName: "quote.bubble.fill").font(.caption2).foregroundColor(.pink).frame(width: 12)
+            } else if song.hasLyrics || library.customRawLyrics[song.id] != nil {
+                Image(systemName: "quote.bubble").font(.caption2).foregroundColor(.gray).frame(width: 12)
+            } else {
+                Color.clear.frame(width: 12)
+            }
+            
+            if song.trackNumber > 0 {
+                Text("\(song.trackNumber)").font(.caption).monospacedDigit().foregroundColor(.gray).frame(width: 20, alignment: .trailing)
+            } else {
+                Color.clear.frame(width: 20)
+            }
+            
             if let artwork = library.getCachedRemoteArtwork(albumName: song.album) {
                 Image(uiImage: artwork).resizable().aspectRatio(contentMode: .fit).frame(width: 40, height: 40).cornerRadius(5)
             } else {
@@ -798,40 +807,26 @@ struct CachedRemoteSongRow: View {
             Spacer().frame(width: 4)
             
             VStack(alignment: .leading, spacing: 2) {
-                Text(song.title)
-                    .font(.subheadline)
-                    .foregroundColor(isAvailable ? .primary : .secondary) // Grey out if not playable
-                
-                Text(song.artist)
-                    .font(.caption)
-                    .foregroundColor(.secondary.opacity(isAvailable ? 1.0 : 0.6))
+                Text(song.title).font(.subheadline).foregroundColor(.primary)
+                Text(song.artist).font(.caption).foregroundColor(.secondary)
             }
             Spacer()
             
             Menu {
-                // Play button is only enabled if connected to the Mac or downloaded
-                if isAvailable {
-                    Button {
-                        // Trigger stream / play logic
-                    } label: { Label("Play", systemImage: "play") }
-                } else {
-                    Text("Connect to Mac to play").font(.caption)
-                }
-                
-                // Add to Playlist is ALWAYS available
+                Button {
+                    audioManager.playStream(remoteSong: song, queue: [song])
+                } label: { Label("Play", systemImage: "play") }
                 Button {
                     NotificationCenter.default.post(name: NSNotification.Name("ShowAddToPlaylist"), object: ["remote_\(song.id)"])
                 } label: { Label("Add to Playlist...", systemImage: "text.badge.plus") }
-                
             } label: {
                 Image(systemName: "ellipsis")
                     .font(.title3)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(.pink)
                     .frame(width: 30, height: 30)
                     .contentShape(Rectangle())
             }
         }
-        .opacity(isConnected ? 1.0 : 0.4) // Grey out the entire row dynamically based on connection
         .padding(.horizontal, 16).padding(.vertical, 8)
     }
 }
@@ -1526,49 +1521,90 @@ struct ArtistListView: View {
     @State private var isScrubbing = false
     @State private var scrubLetter = ""
     
-    var activeSections: [UnifiedArtistSection] {
-        var allApple = library.artistSections.flatMap { $0.artists }
-        var allLocal = Dictionary(grouping: downloads.downloadedSongs, by: { $0.artist }).keys.map { $0 }
+    var activeSections: [UnifiedAlbumSection] {
+        var appleAlbums = showFavoritesOnly ? library.favoriteAlbums : library.albums
+        if !searchText.isEmpty { appleAlbums = library.smartFilterAlbums(in: appleAlbums, for: searchText) }
         
-        // ---> ADD REMOTE ARTISTS <---
-        var allRemote = Dictionary(grouping: library.cachedRemoteLibrary, by: { $0.artist }).keys.map { $0 }
-        let existingArtists = Set(allApple).union(Set(allLocal))
-        allRemote = allRemote.filter { !existingArtists.contains($0) }
+        var allLocalSongs = downloads.downloadedSongs
+        var localAlbums = allLocalSongs
+        if showFavoritesOnly { localAlbums = [] }
+        let groupedLocal = Dictionary(grouping: localAlbums, by: { $0.album })
+        var filteredLocalNames = groupedLocal.keys.sorted()
+        if !searchText.isEmpty { filteredLocalNames = filteredLocalNames.filter { $0.localizedCaseInsensitiveContains(searchText) } }
         
-        if !searchText.isEmpty {
-            allApple = library.smartFilterArtists(in: allApple, for: searchText)
-            allLocal = allLocal.filter { $0.localizedCaseInsensitiveContains(searchText) }
-            allRemote = allRemote.filter { $0.localizedCaseInsensitiveContains(searchText) }
+        let remoteSongs = library.cachedRemoteLibrary
+        let groupedRemote = Dictionary(grouping: remoteSongs, by: { $0.album })
+        var remoteAlbumNames = groupedRemote.keys.sorted()
+        
+        if showFavoritesOnly { remoteAlbumNames = [] }
+        if !searchText.isEmpty { remoteAlbumNames = remoteAlbumNames.filter { $0.localizedCaseInsensitiveContains(searchText) } }
+        
+        let localAlbumNamesSet = Set(filteredLocalNames)
+        remoteAlbumNames = remoteAlbumNames.filter { !localAlbumNamesSet.contains($0) }
+        
+        // --- NEW FILTERING LOGIC ---
+        if filterType == .downloaded {
+            appleAlbums = []
+            remoteAlbumNames = []
+        } else if filterType == .remote {
+            appleAlbums = []
+            filteredLocalNames = []
+        } else if filterType == .full {
+            appleAlbums = appleAlbums.filter { $0.count >= 4 }
+            filteredLocalNames = filteredLocalNames.filter { (groupedLocal[$0]?.count ?? 0) >= 4 }
+            remoteAlbumNames = remoteAlbumNames.filter { (groupedRemote[$0]?.count ?? 0) >= 4 }
         }
         
-        var unified: [UnifiedArtistItem] = []
-        unified.append(contentsOf: allApple.map { UnifiedArtistItem(id: "apple_\($0)", name: $0, sortName: $0, appleArtist: $0, localWrapper: nil) })
-        unified.append(contentsOf: allLocal.map { artist in
-            let songs = downloads.downloadedSongs.filter { s in s.artist == artist }
-            return UnifiedArtistItem(id: "local_\(artist)", name: artist, sortName: artist, appleArtist: nil, localWrapper: LocalArtistWrapper(name: artist, songs: songs))
-        })
-        unified.append(contentsOf: allRemote.map { artist in
-            let songs = library.cachedRemoteLibrary.filter { $0.artist == artist }
-            return UnifiedArtistItem(id: "remote_\(artist)", name: artist, sortName: artist, appleArtist: nil, localWrapper: nil, remoteWrapper: RemoteArtistWrapper(name: artist, songs: songs))
-        })
-        
-        let groupedByName = Dictionary(grouping: unified, by: { $0.name.lowercased() })
-        var mergedUnified: [UnifiedArtistItem] = []
-        for (_, items) in groupedByName {
-            if items.count == 1 { mergedUnified.append(items[0]) } else {
-                let apple = items.first(where: { $0.appleArtist != nil })?.appleArtist
-                let localWrap = items.first(where: { $0.localWrapper != nil })?.localWrapper
-                mergedUnified.append(UnifiedArtistItem(id: "merged_\(items[0].name)", name: items[0].name, sortName: items[0].sortName, appleArtist: apple, localWrapper: localWrap))
-            }
+        if selectedGenre != "All Genres" {
+            appleAlbums = appleAlbums.filter { $0.representativeItem?.genre == selectedGenre }
+            filteredLocalNames = filteredLocalNames.filter { (groupedLocal[$0]?.first?.genre ?? "Album") == selectedGenre }
+            remoteAlbumNames = remoteAlbumNames.filter { (groupedRemote[$0]?.first?.genre ?? "Album") == selectedGenre }
         }
         
-        let grouped = Dictionary(grouping: mergedUnified) { item -> String in
-            let prefix = item.sortName.prefix(1).uppercased()
+        var unified: [UnifiedAlbumItem] = []
+        unified.append(contentsOf: appleAlbums.map {
+            UnifiedAlbumItem(id: String($0.persistentID), title: $0.representativeItem?.albumTitle ?? "Unknown", artist: $0.representativeItem?.artist ?? "Unknown", sortTitle: $0.representativeItem?.albumTitle ?? "Unknown", appleAlbum: $0, localWrapper: nil)
+        })
+        unified.append(contentsOf: filteredLocalNames.map { name in
+            let songs = groupedLocal[name] ?? []
+            return UnifiedAlbumItem(id: "local_\(name)", title: name, artist: songs.first?.artist ?? "Unknown", sortTitle: name, appleAlbum: nil, localWrapper: LocalAlbumWrapper(name: name, songs: songs))
+        })
+        // Append Remote Albums
+        unified.append(contentsOf: remoteAlbumNames.map { name in
+            let songs = groupedRemote[name] ?? []
+            return UnifiedAlbumItem(id: "remote_\(name)", title: name, artist: songs.first?.artist ?? "Unknown", sortTitle: name, appleAlbum: nil, localWrapper: nil, remoteWrapper: RemoteAlbumWrapper(name: name, songs: songs))
+        })
+        
+        let grouped = Dictionary(grouping: unified) { item -> String in
+            if sortType == .trackCount { return "#" }
+            let sortString = sortType == .artistAZ ? item.artist : item.sortTitle
+            let prefix = sortString.prefix(1).uppercased()
             return prefix.rangeOfCharacter(from: .letters) != nil ? prefix : "#"
         }
         
-        let sortedKeys = grouped.keys.sorted { lhs, rhs in if lhs == "#" { return false }; if rhs == "#" { return true }; return lhs < rhs }
-        return sortedKeys.map { letter in let sortedArtists = (grouped[letter] ?? []).sorted { $0.sortName < $1.sortName }; return UnifiedArtistSection(letter: letter, artists: sortedArtists) }
+        let sortedKeys = grouped.keys.sorted { lhs, rhs in
+            if lhs == "#" { return false }
+            if rhs == "#" { return true }
+            return sortType == .titleZA ? lhs > rhs : lhs < rhs
+        }
+        
+        return sortedKeys.map { letter in
+            let sortedAlbums = (grouped[letter] ?? []).sorted {
+                switch sortType {
+                case .titleAZ: return $0.sortTitle < $1.sortTitle
+                case .titleZA: return $0.sortTitle > $1.sortTitle
+                case .artistAZ:
+                    if $0.artist == $1.artist { return $0.sortTitle < $1.sortTitle }
+                    return $0.artist < $1.artist
+                case .trackCount:
+                    let count0 = $0.appleAlbum?.count ?? $0.localWrapper?.songs.count ?? $0.remoteWrapper?.songs.count ?? 0
+                    let count1 = $1.appleAlbum?.count ?? $1.localWrapper?.songs.count ?? $1.remoteWrapper?.songs.count ?? 0
+                    if count0 == count1 { return $0.sortTitle < $1.sortTitle }
+                    return count0 > count1
+                }
+            }
+            return UnifiedAlbumSection(letter: letter, albums: sortedAlbums)
+        }
     }
     
     var body: some View {
@@ -1582,15 +1618,12 @@ struct ArtistListView: View {
                                     NavigationLink(value: item) {
                                         Text(item.name)
                                             .font(.body)
-                                            // GREYS OUT IF DISCONNECTED
-                                            .foregroundColor((item.remoteWrapper != nil && MultipeerManager.shared.connectionState != .connected) ? .secondary : .primary)
+                                            .foregroundColor(.primary) // Reverted to generic primary
                                             .padding(.horizontal)
                                             .padding(.vertical, 12)
                                             .frame(maxWidth: .infinity, alignment: .leading)
                                             .contentShape(Rectangle())
                                     }
-                                    // MAKES UNCLICKABLE IF DISCONNECTED
-                                    .disabled(item.remoteWrapper != nil && MultipeerManager.shared.connectionState != .connected)
                                     Divider().padding(.leading)
                                 }
                             }
@@ -1832,6 +1865,15 @@ struct AlbumListView: View {
                                                     }.frame(height: 30)
                                                 }
                                             }.cornerRadius(12).shadow(color: .black.opacity(0.1), radius: 4, x: 0, y: 2)
+                                        } else if let remote = item.remoteWrapper {
+                                            // Renders exactly like downloaded, with no opacity/disabled blocks
+                                            ZStack(alignment: .bottom) {
+                                                if let artwork = library.getCachedRemoteArtwork(albumName: remote.name) {
+                                                    Image(uiImage: artwork).resizable().aspectRatio(contentMode: .fit)
+                                                } else {
+                                                    Rectangle().fill(Color.gray.opacity(0.3)).aspectRatio(1.0, contentMode: .fit).overlay(Image(systemName: "music.note").font(.largeTitle).foregroundColor(.gray))
+                                                }
+                                            }.cornerRadius(12).shadow(color: .black.opacity(0.1), radius: 4, x: 0, y: 2)
                                         }
                                         
                                         VStack(alignment: .leading, spacing: 2) {
@@ -1842,10 +1884,11 @@ struct AlbumListView: View {
                                             Text(item.artist).font(.subheadline).foregroundColor(.secondary).lineLimit(1)
                                             if let apple = item.appleAlbum { Text(collectionStats(collection: apple)).font(.caption2).foregroundColor(.gray).lineLimit(1) }
                                             else if let local = item.localWrapper { Text(localCollectionStats(songs: local.songs.filter { $0.duration > 0 })).font(.caption2).foregroundColor(.gray).lineLimit(1) }
+                                            else if let remote = item.remoteWrapper { Text("\(remote.songs.count) Songs").font(.caption2).foregroundColor(.gray).lineLimit(1) }
                                         }
                                     }
                                 }
-                                .disabled(item.remoteWrapper != nil && MultipeerManager.shared.connectionState != .connected)
+                                // COMPLETELY REMOVED THE .disabled() BLOCK FROM HERE
                                 .contextMenu {
                                     if let apple = item.appleAlbum {
                                         Button { audioManager.play(song: apple.items.first!, queue: apple.items) } label: { Label("Play", systemImage: "play") }

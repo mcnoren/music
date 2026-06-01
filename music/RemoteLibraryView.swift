@@ -10,15 +10,6 @@ import UIKit
 import LiveKitWebRTC
 
 // MARK: - Navigation Wrappers
-struct RemoteAlbumWrapper: Hashable {
-    let name: String
-    let songs: [RemoteSongDTO]
-}
-
-struct RemoteArtistWrapper: Hashable {
-    let name: String
-    let songs: [RemoteSongDTO]
-}
 
 struct RemoteSongSection: Identifiable {
     let id = UUID()
@@ -787,11 +778,10 @@ struct UniversalAlbumDetailView: View {
                 }
             return .downloads(current)
             
-        case .remote(_):
-            // FIXED: Removed the strict .filter { $0.album == albumName }
-            // We now blindly trust that whatever the Mac puts in the remoteContextQueue
-            // in response to our request belongs to this album.
-            let current = multipeer.remoteContextQueue
+        case .remote(let passedSongs):
+            // Fallback: If offline, the remote queue is empty, so use the wrapper songs!
+            let source = multipeer.remoteContextQueue.isEmpty ? passedSongs : multipeer.remoteContextQueue
+            let current = source
                 .sorted {
                     let d0 = $0.discNumber ?? 1
                     let d1 = $1.discNumber ?? 1
@@ -1172,9 +1162,11 @@ struct UniversalAlbumDetailView: View {
         .ignoresSafeArea(edges: library.isEdgeToEdgeEnabled(for: albumID) == true ? .top : [])
         .onAppear {
             if case .remote(_) = collection {
-                // FIXED: Aggressively wipe the old queue and force a fresh fetch every time you open the album
-                multipeer.remoteContextQueue = []
-                multipeer.sendCommand("REQUEST_ALBUM_SONGS:\(albumName)")
+                // Only wipe the queue and fetch if actually connected!
+                if multipeer.connectionState == .connected {
+                    multipeer.remoteContextQueue = []
+                    multipeer.sendCommand("REQUEST_ALBUM_SONGS:\(albumName)")
+                }
             }
         }
         .onChange(of: multipeer.remoteContextQueue) { newQueue in

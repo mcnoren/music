@@ -437,9 +437,25 @@ extension MultipeerManager: MCSessionDelegate, MCNearbyServiceAdvertiserDelegate
         else if let libraryPayload = try? JSONDecoder().decode(LibrarySyncPayload.self, from: data) {
             DispatchQueue.main.async {
                 self.remoteLibrary = libraryPayload.masterLibrary
-                if let url = libraryPayload.streamServerURL { self.macServerURL = url }
+                
+                #if os(iOS)
+                LibraryManager.shared.saveCachedRemoteMetadata(libraryPayload.masterLibrary)
+                
+                // 👉 NEW: Request missing artwork for all cached remote albums
+                let grouped = Dictionary(grouping: libraryPayload.masterLibrary, by: { $0.album })
+                for (albumName, songs) in grouped {
+                    if LibraryManager.shared.getCachedRemoteArtwork(albumName: albumName) == nil {
+                        if let firstSong = songs.first {
+                            self.sendCommand("REQUEST_ARTWORK:\(firstSong.id)")
+                        }
+                    }
+                }
+                #endif
+                
+                if let url = libraryPayload.streamServerURL {
+                    self.macServerURL = url
+                }
             }
-            return true
         }
         else if let contextPayload = try? JSONDecoder().decode(ContextSyncPayload.self, from: data) {
             DispatchQueue.main.async {
