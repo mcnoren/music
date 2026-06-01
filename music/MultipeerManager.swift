@@ -181,6 +181,10 @@ class MultipeerManager: NSObject, ObservableObject {
     
     @Published var macServerURL: String?
     
+    @Published var isSyncingLibrary: Bool = false
+    @Published var librarySyncProgress: Double = 0.0
+    private var librarySyncObservation: NSKeyValueObservation?
+    
     func cancelDownloads(for albumName: String) {
         DispatchQueue.main.async {
             let tasksToRemove = self.currentDownloads.values.filter { $0.metadata?.album == albumName }
@@ -367,34 +371,37 @@ class MultipeerManager: NSObject, ObservableObject {
 extension MultipeerManager: MCSessionDelegate, MCNearbyServiceAdvertiserDelegate, MCNearbyServiceBrowserDelegate {
     
     func session(_ session: MCSession, peer peerID: MCPeerID, didChange state: MCSessionState) {
-            DispatchQueue.main.async {
-                self.connectedPeers = session.connectedPeers
-                if state == .connected {
-                    self.connectionState = .connected
-                    self.connectionTimer?.invalidate()
-                    #if os(iOS)
-                    self.syncLyricsDatabase(documents: LibraryManager.shared.syncedLyrics)
-                    #elseif os(macOS)
-                    DispatchQueue.main.async { self.onPeerConnected?() }
-                    #endif
-                } else if state == .notConnected {
-                    self.connectionState = .disconnected
-                    self.isCastingToMac = false
-                    self.remoteLibrary = []
-                    
-                    #if os(macOS)
-                    // THE FIX: Completely rebuild the Mac's session to purge "Ghost" peers
-                    self.session?.disconnect()
-                    self.advertiser?.stopAdvertisingPeer()
-                    
-                    self.setupSession() // Create a brand new, clean MCSession
-                    self.advertiser.startAdvertisingPeer()
-                    #elseif os(iOS)
-                    self.startAutoConnect()
-                    #endif
-                }
+        DispatchQueue.main.async {
+            self.connectedPeers = session.connectedPeers
+            if state == .connected {
+                self.connectionState = .connected
+                self.connectionTimer?.invalidate()
+                #if os(iOS)
+                self.syncLyricsDatabase(documents: LibraryManager.shared.syncedLyrics)
+                
+                // 👉 REQUEST THE LIBRARY AUTOMATICALLY ON CONNECTION
+                self.sendCommand("REQUEST_LIBRARY")
+                
+                #elseif os(macOS)
+                DispatchQueue.main.async { self.onPeerConnected?() }
+                #endif
+            } else if state == .notConnected {
+                self.connectionState = .disconnected
+                self.isCastingToMac = false
+                self.remoteLibrary = []
+                
+                #if os(macOS)
+                self.session?.disconnect()
+                self.advertiser?.stopAdvertisingPeer()
+                
+                self.setupSession()
+                self.advertiser.startAdvertisingPeer()
+                #elseif os(iOS)
+                self.startAutoConnect()
+                #endif
             }
         }
+    }
     
     
     func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
@@ -522,12 +529,26 @@ extension MultipeerManager: MCSessionDelegate, MCNearbyServiceAdvertiserDelegate
                     if let libraryData = self.onRequestLibrary?() {
                         let serverURL = MacStreamServer.shared.start()
                         let payload = LibrarySyncPayload(masterLibrary: libraryData, streamServerURL: serverURL)
-                        if let encoded = try? JSONEncoder().encode(payload) { self.sendDataToPeers(encoded) }
-                    }
-                } else if syncCmd.command == "REQUEST_ALL_ALBUMS" {
-                    if let albums = self.onRequestAlbums?() {
-                        let payload = AlbumsSyncPayload(albums: albums)
-                        if let encoded = try? JSONEncoder().encode(payload) { self.sendDataToPeers(encoded) }
+                        if let encoded = try? JSONEncoder().encode(payload) {
+                            
+                            // 👉 WRITE TO TEMP FILE AND SEND AS A RESOURCE FOR ACCURATE PROGRESS
+                            let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("LIBRARY_METADATA_SYNC.json")
+                            do {
+                                try encoded.write(to: tempURL)
+                                for peer in self.session.connectedPeers {
+                                    self.session.sendResource(at: tempURL, withName: "LIBRARY_METADATA_SYNC", toPeer: peer) { error in
+                                        if let e = error { print("Failed to send library resource: \(e)") }
+                                    }
+                                }
+                            } catch {
+                                print("Failed to write library temp file: \(error)")
+                            }
+                        }
+                    } else if syncCmd.command == "REQUEST_ALL_ALBUMS" {
+                        if let albums = self.onRequestAlbums?() {
+                            let payload = AlbumsSyncPayload(albums: albums)
+                            if let encoded = try? JSONEncoder().encode(payload) { self.sendDataToPeers(encoded) }
+                        }
                     }
                 } else if syncCmd.command == "REQUEST_ALL_ARTISTS" {
                     if let artists = self.onRequestArtists?() {
@@ -591,10 +612,16 @@ extension MultipeerManager: MCSessionDelegate, MCNearbyServiceAdvertiserDelegate
         else if let libraryPayload = try? JSONDecoder().decode(LibrarySyncPayload.self, from: data) {
             DispatchQueue.main.async {
                 self.remoteLibrary = libraryPayload.masterLibrary
-                LibraryManager.shared.saveCachedRemoteMetadata(libraryPayload.masterLibrary) // <-- ADD THIS
-                if let url = libraryPayload.streamServerURL { self.macServerURL = url }
+                
+                // 👉 Wrap the iOS-only save function
+                #if os(iOS)
+                LibraryManager.shared.saveCachedRemoteMetadata(libraryPayload.masterLibrary)
+                #endif
+                
+                if let url = libraryPayload.streamServerURL {
+                    self.macServerURL = url
+                }
             }
-            return true
         }
         // CHANGED: Listens for unique contextQueue variable
         else if let contextPayload = try? JSONDecoder().decode(ContextSyncPayload.self, from: data) {
@@ -608,11 +635,17 @@ extension MultipeerManager: MCSessionDelegate, MCNearbyServiceAdvertiserDelegate
         else if let artworkPayload = try? JSONDecoder().decode(ArtworkSyncPayload.self, from: data) {
             DispatchQueue.main.async {
                 var albumName = self.remoteLibrary.first(where: { $0.id == artworkPayload.songId })?.album
-                if albumName == nil { albumName = self.remoteContextQueue.first(where: { $0.id == artworkPayload.songId })?.album }
+                if albumName == nil {
+                    albumName = self.remoteContextQueue.first(where: { $0.id == artworkPayload.songId })?.album
+                }
                 
                 if let albumName = albumName {
-                    // Deduplicate and save to disk
+                    
+                    // 👉 Wrap the iOS-only save function
+                    #if os(iOS)
                     LibraryManager.shared.saveRemoteArtwork(data: artworkPayload.artworkData, albumName: albumName)
+                    #endif
+                    
                     for i in self.remoteLibrary.indices {
                         if self.remoteLibrary[i].album == albumName { self.remoteLibrary[i].artworkData = artworkPayload.artworkData }
                     }
@@ -621,15 +654,13 @@ extension MultipeerManager: MCSessionDelegate, MCNearbyServiceAdvertiserDelegate
                     }
                 }
                 
-                // FIX: FORCE UI REFRESH. Inject the artwork directly into the active player so SwiftUI redraws!
                 #if os(iOS)
                 if AudioManager.shared.currentRemoteDTO?.id == artworkPayload.songId || AudioManager.shared.currentRemoteDTO?.album == albumName {
                     AudioManager.shared.currentRemoteDTO?.artworkData = artworkPayload.artworkData
-                    AudioManager.shared.updateLockScreenInfo() // Update the Lock Screen too
+                    AudioManager.shared.updateLockScreenInfo()
                 }
                 #endif
             }
-            return true
         }
         else if let lyricsPayload = try? JSONDecoder().decode(StreamLyricsPayload.self, from: data) {
             DispatchQueue.main.async {
@@ -780,6 +811,18 @@ extension MultipeerManager: MCSessionDelegate, MCNearbyServiceAdvertiserDelegate
     
     func session(_ session: MCSession, didStartReceivingResourceWithName resourceName: String, fromPeer peerID: MCPeerID, with progress: Progress) {
         DispatchQueue.main.async {
+            // 👉 INTERCEPT THE LIBRARY SYNC TO POWER THE PROGRESS BAR
+            if resourceName == "LIBRARY_METADATA_SYNC" {
+                self.isSyncingLibrary = true
+                self.librarySyncProgress = 0.0
+                self.librarySyncObservation = progress.observe(\.fractionCompleted, options: [.initial, .new]) { [weak self] p, _ in
+                    DispatchQueue.main.async {
+                        self?.librarySyncProgress = p.fractionCompleted
+                    }
+                }
+                return // Stop here so it doesn't show up in the Download Queue sheet
+            }
+            
             if self.currentDownloads[resourceName] == nil {
                 self.currentDownloads[resourceName] = DownloadTask(id: resourceName)
             }
@@ -788,20 +831,32 @@ extension MultipeerManager: MCSessionDelegate, MCNearbyServiceAdvertiserDelegate
     }
     
     func session(_ session: MCSession, didFinishReceivingResourceWithName resourceName: String, fromPeer peerID: MCPeerID, at localURL: URL?, withError error: (any Error)?) {
+            
+        // 1. 👉 Unwrap the URL at the very top so ALL your code below can see it
+        guard let tempURL = localURL else { return }
+        
         #if os(iOS)
         DispatchQueue.main.async {
-            self.currentDownloads.removeValue(forKey: resourceName)
             
-            if self.cancelledDownloads.contains(resourceName) {
-                self.cancelledDownloads.remove(resourceName)
-                if let tempURL = localURL { try? FileManager.default.removeItem(at: tempURL) }
-                return
-            }
-            
-            guard let tempURL = localURL, error == nil else {
-                self.downloadMessage = "Transfer Interrupted: \(error?.localizedDescription ?? "Unknown Error")"
-                self.showDownloadAlert = true
-                return
+            // 2. Intercept the Library Sync
+            if resourceName == "LIBRARY_METADATA_SYNC" {
+                self.isSyncingLibrary = false
+                self.librarySyncObservation?.invalidate()
+                self.librarySyncObservation = nil
+                
+                if error == nil {
+                    if let data = try? Data(contentsOf: tempURL) {
+                        
+                        // 3. 👉 Fix the ambiguity by explicitly forcing Swift to use the Void function
+                        let processVoidVersion: (Data) -> Void = self.processReceivedData
+                        processVoidVersion(data)
+                        
+                    }
+                }
+                
+                // Clean up the temp metadata file
+                try? FileManager.default.removeItem(at: tempURL)
+                return // Stop here so it doesn't go into your actual song download queue below
             }
             
             let fileManager = FileManager.default

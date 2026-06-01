@@ -1319,19 +1319,52 @@ struct ConnectToMacButton: View {
                 multipeer.disconnect()
             }
         }) {
-            HStack(spacing: 8) {
-                switch multipeer.connectionState {
-                case .disconnected: Image(systemName: "macwindow"); Text("Connect to Mac")
-                case .connecting: ProgressView().tint(.white); Text("Connecting...")
-                case .connected: Image(systemName: "macwindow.badge.checkmark"); Text("Connected to Mac")
-                case .failed: Image(systemName: "exclamationmark.triangle.fill"); Text("Connection Failed")
+            ZStack(alignment: .leading) {
+                // 👉 THE ACCURATE BACKGROUND PROGRESS BAR
+                if multipeer.isSyncingLibrary {
+                    GeometryReader { geo in
+                        Rectangle()
+                            .fill(Color.white.opacity(0.25))
+                            .frame(width: geo.size.width * CGFloat(multipeer.librarySyncProgress))
+                            .animation(.linear(duration: 0.1), value: multipeer.librarySyncProgress)
+                    }
                 }
+                
+                HStack(spacing: 8) {
+                    switch multipeer.connectionState {
+                    case .disconnected: Image(systemName: "macwindow"); Text("Connect to Mac")
+                    case .connecting: ProgressView().tint(.white); Text("Connecting...")
+                    case .connected:
+                        if multipeer.isSyncingLibrary {
+                            ProgressView().tint(.white)
+                            Text("Syncing Library \(Int(multipeer.librarySyncProgress * 100))%")
+                        } else {
+                            Image(systemName: "macwindow.badge.checkmark"); Text("Connected to Mac")
+                        }
+                    case .failed: Image(systemName: "exclamationmark.triangle.fill"); Text("Connection Failed")
+                    }
+                }
+                .font(.headline).foregroundColor(.white).frame(maxWidth: .infinity).padding(.vertical, 14)
             }
-            .font(.headline).foregroundColor(.white).frame(maxWidth: .infinity).padding(.vertical, 14).background(backgroundColor).cornerRadius(12).shadow(color: backgroundColor.opacity(0.3), radius: 8, x: 0, y: 4).contentTransition(.symbolEffect(.replace))
-        }.padding(.horizontal, 20).disabled(multipeer.connectionState == .connecting).animation(.easeInOut(duration: 0.2), value: multipeer.connectionState)
+            .background(backgroundColor)
+            .cornerRadius(12)
+            .shadow(color: backgroundColor.opacity(0.3), radius: 8, x: 0, y: 4)
+            .contentTransition(.symbolEffect(.replace))
+        }
+        .padding(.horizontal, 20)
+        // Disable the button while it is actively pulling the database
+        .disabled(multipeer.connectionState == .connecting || multipeer.isSyncingLibrary)
+        .animation(.easeInOut(duration: 0.2), value: multipeer.connectionState)
+        .animation(.easeInOut(duration: 0.2), value: multipeer.isSyncingLibrary)
     }
+    
     private var backgroundColor: Color {
-        switch multipeer.connectionState { case .disconnected: return Color.pink; case .connecting: return Color.gray; case .connected: return Color.green; case .failed: return Color.red }
+        switch multipeer.connectionState {
+        case .disconnected: return Color.pink
+        case .connecting: return Color.gray
+        case .connected: return multipeer.isSyncingLibrary ? Color.blue : Color.green
+        case .failed: return Color.red
+        }
     }
 }
 
@@ -3012,9 +3045,6 @@ struct RemoteMetadataStorageView: View {
     }
 }
 
-// In SettingsView, add the navigation link to the Data & Storage Section:
-NavigationLink("Manage Mac Metadata") { RemoteMetadataStorageView() }
-
 // MARK: - Video Transfer Helper
 struct VideoTransferable: Transferable {
     let url: URL
@@ -3623,26 +3653,36 @@ struct SettingsView: View {
                     NavigationLink("Manage Word Sync Data") { WordSyncedLyricsStorageView() }
                     NavigationLink("Manage Downloaded Music") { DownloadsStorageView() }
                     NavigationLink("Manage Artwork Data") { ArtworkDataStorageView() }
+                    
+                    // THIS IS THE CORRECT LOCATION FOR THE NEW LINK
+                    NavigationLink("Manage Mac Metadata") { RemoteMetadataStorageView() }
                 }
                 
-                Section(header: Text("Landscape")) { Picker("Mode", selection: $settings.landscapeMode) { ForEach(AppSettings.LandscapeMode.allCases) { Text($0.rawValue).tag($0) } } }
+                Section(header: Text("Landscape")) {
+                    Picker("Mode", selection: $settings.landscapeMode) {
+                        ForEach(AppSettings.LandscapeMode.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                }
                 
                 Section(header: Text("Appearance")) {
-                    Toggle("Show Mac Tab", isOn: $settings.showMacTab);
-                    Toggle("Show Song Artwork", isOn: $settings.showListArtwork);
-                    Picker("Lyric Highlight Color", selection: $settings.lyricColorName) { ForEach(AppSettings.LyricColorName.allCases) { color in Text(color.rawValue).tag(color) } }
+                    Toggle("Show Mac Tab", isOn: $settings.showMacTab)
+                    Toggle("Show Song Artwork", isOn: $settings.showListArtwork)
+                    Picker("Lyric Highlight Color", selection: $settings.lyricColorName) {
+                        ForEach(AppSettings.LyricColorName.allCases) { color in Text(color.rawValue).tag(color) }
+                    }
                     Toggle("Smart Text Coloring", isOn: $useSmartTextColoring)
-                        // Only show the restore button if the user has changed the default setting
-                        if !useSmartTextColoring {
-                            Button(action: {
-                                withAnimation {
-                                    useSmartTextColoring = true
-                                }
-                            }) {
-                                Text("Restore Smart Text Coloring")
-                                    .foregroundColor(.accentColor)
+                    
+                    // Only show the restore button if the user has changed the default setting
+                    if !useSmartTextColoring {
+                        Button(action: {
+                            withAnimation {
+                                useSmartTextColoring = true
                             }
+                        }) {
+                            Text("Restore Smart Text Coloring")
+                                .foregroundColor(.accentColor)
                         }
+                    }
                 }
                 
                 Section(header: Text("Playback Timing"), footer: Text("Automatically skip long intros or fade-outs.")) {
@@ -3654,7 +3694,11 @@ struct SettingsView: View {
                     Toggle("Countdown on Rewind", isOn: $settings.rewindCountdown)
                 }
                 
-            }.navigationTitle("Settings").toolbar { Button("Done") { dismiss() } }
+            }
+            .navigationTitle("Settings")
+            .toolbar {
+                Button("Done") { dismiss() }
+            }
         }
     }
 }

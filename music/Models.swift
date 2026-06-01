@@ -10,7 +10,7 @@ struct UnifiedSongItem: Identifiable {
     let sortTitle: String
     let appleSong: MPMediaItem?
     let localSong: LocalSong?
-    let remoteSong: RemoteSongDTO? // <-- ADD THIS
+    var remoteSong: RemoteSongDTO? = nil
 }
 
 struct UnifiedSongSection: Identifiable {
@@ -26,7 +26,7 @@ struct UnifiedAlbumItem: Identifiable, Hashable {
     let sortTitle: String
     let appleAlbum: MPMediaItemCollection?
     let localWrapper: LocalAlbumWrapper?
-    let remoteWrapper: RemoteAlbumWrapper? // <-- ADD THIS
+    var remoteWrapper: RemoteAlbumWrapper? = nil
 
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
     static func == (lhs: UnifiedAlbumItem, rhs: UnifiedAlbumItem) -> Bool { lhs.id == rhs.id }
