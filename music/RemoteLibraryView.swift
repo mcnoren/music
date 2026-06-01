@@ -888,13 +888,17 @@ struct UniversalAlbumDetailView: View {
                                             .clipped()
                                             .offset(y: scrollUpOffset)
                                             .mask(
-                                                VStack(spacing: 0) {
-                                                    Color.black
-                                                    LinearGradient(
-                                                        stops: [.init(color: .black, location: 0.0), .init(color: .clear, location: 1.0)],
-                                                        startPoint: .top, endPoint: .bottom
-                                                    ).frame(height: geo.size.height * 0.15)
-                                                }
+                                                LinearGradient(
+                                                    stops: [
+                                                        .init(color: .black, location: 0.0),
+                                                        .init(color: .black, location: 0.85),
+                                                        .init(color: .clear, location: 1.0)
+                                                    ],
+                                                    startPoint: .top,
+                                                    endPoint: .bottom
+                                                )
+                                                .ignoresSafeArea()
+                                                .offset(y: -scrollUpOffset)
                                             )
                                             .offset(y: -overscroll)
                                             
@@ -914,18 +918,17 @@ struct UniversalAlbumDetailView: View {
                                             .clipped()
                                             .offset(y: scrollUpOffset)
                                             .mask(
-                                                VStack(spacing: 0) {
-                                                    Color.black
-                                                    LinearGradient(
-                                                        stops: [
-                                                            .init(color: .black, location: 0.0),
-                                                            .init(color: .clear, location: 1.0)
-                                                        ],
-                                                        startPoint: .top,
-                                                        endPoint: .bottom
-                                                    )
-                                                    .frame(height: geo.size.height * 0.15)
-                                                }
+                                                LinearGradient(
+                                                    stops: [
+                                                        .init(color: .black, location: 0.0),
+                                                        .init(color: .black, location: 0.85),
+                                                        .init(color: .clear, location: 1.0)
+                                                    ],
+                                                    startPoint: .top,
+                                                    endPoint: .bottom
+                                                )
+                                                .ignoresSafeArea()
+                                                .offset(y: -scrollUpOffset)
                                             )
                                             .offset(y: -overscroll)
                                     } else {
@@ -935,19 +938,17 @@ struct UniversalAlbumDetailView: View {
                                             .clipped()
                                             .offset(y: scrollUpOffset)
                                             .mask(
-                                                VStack(spacing: 0) {
-                                                    Color.black
-                                                    LinearGradient(
-                                                        stops: [
-                                                            .init(color: .black, location: 0.0),
-                                                            .init(color: .clear, location: 1.0)
-                                                        ],
-                                                        startPoint: .top,
-                                                        endPoint: .bottom
-                                                    )
-                                                    .frame(height: geo.size.height * 0.15)
-                                                }
-                                                .padding(.bottom, scrollUpOffset)
+                                                LinearGradient(
+                                                    stops: [
+                                                        .init(color: .black, location: 0.0),
+                                                        .init(color: .black, location: 0.85),
+                                                        .init(color: .clear, location: 1.0)
+                                                    ],
+                                                    startPoint: .top,
+                                                    endPoint: .bottom
+                                                )
+                                                .ignoresSafeArea()
+                                                .offset(y: -scrollUpOffset)
                                             )
                                             .offset(y: -overscroll)
                                     }
