@@ -89,11 +89,12 @@ struct FullPlayerView: View {
                             .resizable()
                             .aspectRatio(contentMode: .fill)
                             .frame(width: geometry.size.width, height: geometry.size.height)
-                            .clipped()
-                            .blur(radius: 40)
+                            // Remove .clipped() from here if you have it
+                            .blur(radius: 40, opaque: true) // 👈 ADD `opaque: true` HERE
                             .overlay(Color.black.opacity(0.5))
                     } else { Color.black }
                 }
+                .ignoresSafeArea() // 👈 ADD THIS HERE
                 .contentShape(Rectangle())
                 
                 VStack(spacing: 0) {

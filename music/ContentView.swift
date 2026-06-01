@@ -2024,6 +2024,7 @@ struct AlbumDetailView: View {
                                                             startPoint: .top, endPoint: .bottom
                                                         ).frame(height: geo.size.height * 0.15)
                                                     }
+                                                    .ignoresSafeArea(.all, edges: .top)
                                                 )
                                                 .offset(y: -overscroll)
                                                 
@@ -2056,6 +2057,7 @@ struct AlbumDetailView: View {
                                                         )
                                                         .frame(height: geo.size.height * 0.15)
                                                     }
+                                                    .ignoresSafeArea(.all, edges: .top)
                                                 )
                                                 .offset(y: -overscroll)
                                         } else {
@@ -2255,11 +2257,13 @@ struct AlbumDetailView: View {
                     Spacer().frame(height: 100)
                 }
             }
+            .ignoresSafeArea(edges: library.isEdgeToEdgeEnabled(for: albumID) == true ? .top : [])
         }
         .coordinateSpace(name: "albumScroll")
         .ignoresSafeArea(edges: library.isEdgeToEdgeEnabled(for: albumID) == true ? .top : [])
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(library.isEdgeToEdgeEnabled(for: albumID) == true ? .hidden : .automatic, for: .navigationBar)
+        .toolbarColorScheme(library.isEdgeToEdgeEnabled(for: albumID) == true ? .dark : nil, for: .navigationBar)
         .sheet(isPresented: $showAlbumSettings) {
             let art = album.representativeItem?.artwork?.image(at: CGSize(width: 800, height: 800))
             AlbumSettingsSheet(albumID: albumID, artworkImage: art)
