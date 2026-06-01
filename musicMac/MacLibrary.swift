@@ -163,7 +163,7 @@ class MacLibrary: ObservableObject {
         // Push update to iPhone
         MultipeerManager.shared.syncLyricsDatabase(documents: syncedLyrics)
     }
-
+    
     func merge(remoteLyrics: [String: SyncedLyricsDocument]) {
         var didUpdate = false
         for (songId, remoteDoc) in remoteLyrics {
@@ -203,7 +203,7 @@ class MacLibrary: ObservableObject {
             savePlaylists()
         }
     }
-        
+    
     func deleteSong(_ song: MacSong) {
         // 1. Remove from the main library
         songs.removeAll { $0.id == song.id }
@@ -215,7 +215,7 @@ class MacLibrary: ObservableObject {
         }
         savePlaylists()
     }
-
+    
     func clearAllFiles() {
         self.songs.removeAll()
         self.playlists.removeAll()
@@ -271,7 +271,7 @@ class MacLibrary: ObservableObject {
         }
         return dir
     }
-
+    
     func hasSyncedLyrics(for song: MacSong) -> Bool {
         // 1. Direct ID match (Created on the Mac)
         if let lines = syncedLyrics[song.id]?.lines {
@@ -381,7 +381,30 @@ class MacLibrary: ObservableObject {
                         
                         // Only write the file if we don't already have the cover for this album!
                         if !FileManager.default.fileExists(atPath: fileURL.path) {
-                            try? data.write(to: fileURL)
+                            var finalData = data
+                            
+                            // Compress the image down so it doesn't create huge files over Multipeer!
+                            if let image = NSImage(data: data) {
+                                let maxSize: CGFloat = 600.0
+                                var newSize = image.size
+                                if newSize.width > maxSize || newSize.height > maxSize {
+                                    let ratio = min(maxSize / newSize.width, maxSize / newSize.height)
+                                    newSize = NSSize(width: newSize.width * ratio, height: newSize.height * ratio)
+                                }
+                                
+                                let resized = NSImage(size: newSize)
+                                resized.lockFocus()
+                                image.draw(in: NSRect(origin: .zero, size: newSize), from: NSRect(origin: .zero, size: image.size), operation: .copy, fraction: 1.0)
+                                resized.unlockFocus()
+                                
+                                if let tiff = resized.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff) {
+                                    if let jpeg = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.7]) {
+                                        finalData = jpeg
+                                    }
+                                }
+                            }
+                            
+                            try? finalData.write(to: fileURL)
                         }
                     }
                 default: break
@@ -434,7 +457,7 @@ class MacLibrary: ObservableObject {
                         // 3. FALLBACK LYRICS
                         if lyrics == nil {
                             if keyDesc.contains("lyr") || keyDesc.contains("uslt") || keyDesc.contains("sylt") || keyDesc.contains("text") ||
-                               commonKeyStr.contains("lyr") || identifier.contains("lyric") {
+                                commonKeyStr.contains("lyr") || identifier.contains("lyric") {
                                 
                                 if let str = item.stringValue, !str.isEmpty {
                                     lyrics = str

@@ -322,7 +322,21 @@ struct RemoteAlbumListView: View {
                                 NavigationLink(value: RemoteAlbumWrapper(name: album.name, songs: [])) {
                                     HStack(spacing: 16) {
                                         ZStack(alignment: .bottom) {
-                                            Rectangle().fill(Color.gray.opacity(0.3)).frame(width: 50, height: 50).cornerRadius(6).overlay(Image(systemName: "square.stack").foregroundColor(.gray))
+                                            if let cached = LibraryManager.shared.getCachedRemoteArtwork(albumName: album.name) {
+                                                Image(uiImage: cached)
+                                                    .resizable()
+                                                    .aspectRatio(contentMode: .fill)
+                                                    .frame(width: 50, height: 50)
+                                                    .cornerRadius(6)
+                                                    .clipped()
+                                            } else {
+                                                Rectangle().fill(Color.gray.opacity(0.3)).frame(width: 50, height: 50).cornerRadius(6).overlay(Image(systemName: "square.stack").foregroundColor(.gray))
+                                                    .onAppear {
+                                                        if let song = multipeer.remoteLibrary.first(where: { $0.album == album.name }) {
+                                                            multipeer.requestArtworkLazily(for: song)
+                                                        }
+                                                    }
+                                            }
                                             AlbumProgressOverlay(albumName: album.name)
                                         }
                                         VStack(alignment: .leading, spacing: 4) {
@@ -665,10 +679,15 @@ struct RemoteSongRow: View {
             
             // 4. Artwork
             if showArtwork {
-                if let data = song.artworkData, let uiImage = UIImage(data: data) {
+                if let cached = library.getCachedRemoteArtwork(albumName: song.album) {
+                    Image(uiImage: cached).resizable().frame(width: 40, height: 40).cornerRadius(6)
+                } else if let data = song.artworkData, let uiImage = UIImage(data: data) {
                     Image(uiImage: uiImage).resizable().frame(width: 40, height: 40).cornerRadius(6)
                 } else {
                     Rectangle().fill(Color.gray.opacity(0.3)).frame(width: 40, height: 40).cornerRadius(6).overlay(Image(systemName: "music.note").foregroundColor(.gray))
+                        .onAppear {
+                            multipeer.requestArtworkLazily(for: song)
+                        }
                 }
             }
             Spacer().frame(width: 4)
@@ -739,7 +758,7 @@ struct UniversalAlbumDetailView: View {
     @ObservedObject var downloads = DownloadsManager.shared
     @ObservedObject var multipeer = MultipeerManager.shared
     @ObservedObject var library = LibraryManager.shared
-    @ObservedObject var audioManager = AudioManager.shared // <--- ADDED
+    @ObservedObject var audioManager = AudioManager.shared
     
     @State private var showAlbumSettings = false
     
@@ -779,7 +798,6 @@ struct UniversalAlbumDetailView: View {
             return .downloads(current)
             
         case .remote(let passedSongs):
-            // Fallback: If offline, the remote queue is empty, so use the wrapper songs!
             let source = multipeer.remoteContextQueue.isEmpty ? passedSongs : multipeer.remoteContextQueue
             let current = source
                 .sorted {
@@ -807,7 +825,6 @@ struct UniversalAlbumDetailView: View {
             return false
         }()
         
-        // NEW: Calculate if current song belongs to this specific album
         let isCurrentAlbum: Bool = {
             switch activeSongs {
             case .downloads(let localSongs):
@@ -820,12 +837,23 @@ struct UniversalAlbumDetailView: View {
         
         let artistName: String = { switch activeSongs { case .downloads(let songs): return songs.first?.artist ?? "Unknown Artist"; case .remote(let songs): return songs.first?.artist ?? "Unknown Artist" } }()
         let songCount: Int = { switch activeSongs { case .downloads(let songs): return songs.count; case .remote(let songs): return songs.count } }()
-        let artworkData: Data? = { switch activeSongs { case .downloads(let songs): return songs.first?.artworkData; case .remote(let songs): return songs.first?.artworkData } }()
         let totalDuration: TimeInterval = { switch activeSongs { case .downloads(let songs): return songs.reduce(0) { $0 + $1.duration }; case .remote(let songs): return songs.reduce(0) { $0 + $1.duration } } }()
         let albumGenre: String = { switch activeSongs { case .downloads(let songs): return songs.first?.genre ?? "Album"; case .remote(let songs): return songs.first?.genre ?? "Album" } }()
         
         let isDownloading = !multipeer.currentDownloads.values.filter { $0.metadata?.album == albumName }.isEmpty
         let isEdgeToEdge = library.isEdgeToEdgeEnabled(for: albumID) == true
+        
+        // NEW: Unify the originalArtwork computed property to cleanly grab the cached image
+        let originalArtwork: UIImage? = {
+            switch activeSongs {
+            case .downloads(let songs):
+                if let data = songs.first?.artworkData { return UIImage(data: data) }
+            case .remote(let songs):
+                if let cached = library.getCachedRemoteArtwork(albumName: albumName) { return cached }
+                if let data = songs.first?.artworkData { return UIImage(data: data) }
+            }
+            return nil
+        }()
         
         ZStack {
             if let hex = library.customAlbumColors[albumID] { Color(customHex: hex).ignoresSafeArea() }
@@ -836,7 +864,6 @@ struct UniversalAlbumDetailView: View {
                     
                     if isEdgeToEdge {
                         VStack(spacing: 0) {
-                            let originalArtwork = artworkData != nil ? UIImage(data: artworkData!) : nil
                             let aspect: CGFloat = {
                                 guard let img = originalArtwork else { return 1.0 }
                                 let w = img.size.width
@@ -1024,8 +1051,8 @@ struct UniversalAlbumDetailView: View {
                                     .frame(width: 250, height: 250)
                                     .cornerRadius(12)
                                     .shadow(radius: 10)
-                            } else if let data = artworkData, let uiImage = UIImage(data: data) {
-                                Image(uiImage: uiImage).resizable().aspectRatio(contentMode: .fit).frame(width: 250, height: 250).cornerRadius(12).shadow(radius: 10)
+                            } else if let img = originalArtwork {
+                                Image(uiImage: img).resizable().aspectRatio(contentMode: .fit).frame(width: 250, height: 250).cornerRadius(12).shadow(radius: 10)
                             } else {
                                 Rectangle().fill(Color.gray.opacity(0.3)).frame(width: 250, height: 250).cornerRadius(12)
                             }
@@ -1108,7 +1135,6 @@ struct UniversalAlbumDetailView: View {
                     }
 
                     LazyVStack(spacing: 0) {
-                        // FIXED: Added a loading indicator so it doesn't just look empty while waiting for the Mac
                         if songCount == 0 && multipeer.connectionState == .connected {
                             VStack(spacing: 16) {
                                 ProgressView()
@@ -1175,7 +1201,6 @@ struct UniversalAlbumDetailView: View {
         .ignoresSafeArea(edges: library.isEdgeToEdgeEnabled(for: albumID) == true ? .top : [])
         .onAppear {
             if case .remote(_) = collection {
-                // Only wipe the queue and fetch if actually connected!
                 if multipeer.connectionState == .connected {
                     multipeer.remoteContextQueue = []
                     multipeer.sendCommand("REQUEST_ALBUM_SONGS:\(albumName)")
@@ -1184,8 +1209,8 @@ struct UniversalAlbumDetailView: View {
         }
         .onChange(of: multipeer.remoteContextQueue) { newQueue in
             if case .remote(_) = collection {
-                if let firstSong = newQueue.first, firstSong.artworkData == nil {
-                    multipeer.sendCommand("REQUEST_ARTWORK:\(firstSong.id)")
+                if let firstSong = newQueue.first {
+                    multipeer.requestArtworkLazily(for: firstSong)
                 }
             }
         }
@@ -1194,8 +1219,7 @@ struct UniversalAlbumDetailView: View {
         .toolbarBackground(.hidden, for: .tabBar)
         .toolbarBackground(library.isEdgeToEdgeEnabled(for: albumID) == true ? .hidden : .automatic, for: .navigationBar)
         .sheet(isPresented: $showAlbumSettings) {
-            let art = artworkData != nil ? UIImage(data: artworkData!) : nil
-            AlbumSettingsSheet(albumID: albumID, artworkImage: art)
+            AlbumSettingsSheet(albumID: albumID, artworkImage: originalArtwork)
         }
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
@@ -1246,7 +1270,6 @@ struct UniversalAlbumDetailView: View {
         case .downloads(let localSongs):
             if let first = localSongs.first { AudioManager.shared.play(localSong: first, queue: localSongs) }
         case .remote(let remoteSongs):
-            // FIX: Call playStream instead of play
             if let first = remoteSongs.first { AudioManager.shared.playStream(remoteSong: first, queue: remoteSongs) }
         }
     }
@@ -1258,7 +1281,6 @@ struct UniversalAlbumDetailView: View {
         case .downloads(let localSongs):
             let shuffled = localSongs.shuffled(); if let first = shuffled.first { AudioManager.shared.play(localSong: first, queue: shuffled) }
         case .remote(let remoteSongs):
-            // FIX: Call playStream instead of play
             let shuffled = remoteSongs.shuffled(); if let first = shuffled.first { AudioManager.shared.playStream(remoteSong: first, queue: shuffled) }
         }
     }
