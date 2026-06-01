@@ -582,10 +582,12 @@ struct DownloadsSongRow: View {
     var customSecondaryColor: Color? = nil
     var showArtist: Bool = true
     
-    @ObservedObject var audioManager = AudioManager.shared
+    // 1. REMOVE @ObservedObject here
+    var audioManager = AudioManager.shared
     @ObservedObject var library = LibraryManager.shared
     
-    var isPlaying: Bool { audioManager.currentLocalSong?.id == song.id }
+    // 2. Change isPlaying to State
+    @State private var isPlaying: Bool = false
     
     var body: some View {
         let artworkImage = song.artworkData != nil ? UIImage(data: song.artworkData!) : nil
@@ -613,6 +615,13 @@ struct DownloadsSongRow: View {
             }
         ) {
             DownloadsSongMenuContent(song: song)
+        }
+        // 3. ONLY update when the current song actually changes
+        .onReceive(audioManager.$currentLocalSong) { currentSong in
+            isPlaying = (currentSong?.id == song.id)
+        }
+        .onAppear {
+            isPlaying = (audioManager.currentLocalSong?.id == song.id)
         }
     }
 }

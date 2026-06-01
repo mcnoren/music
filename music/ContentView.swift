@@ -422,7 +422,7 @@ struct AppPlaylistDetailView: View {
 // MARK: - Portrait Layout Routing
 struct PortraitLayout: View {
     @ObservedObject var library: LibraryManager
-    @ObservedObject var audioManager: AudioManager
+    var audioManager: AudioManager
     @ObservedObject var settings: AppSettings
     @ObservedObject var navState: NavigationStateManager
     @ObservedObject var uiState: PlayerUIState
@@ -777,10 +777,14 @@ struct SongRow: View {
 
 struct CachedRemoteSongRow: View {
     let song: RemoteSongDTO
-    @ObservedObject var audioManager: AudioManager
-    @ObservedObject var library: LibraryManager
     
-    var isPlaying: Bool { audioManager.currentRemoteDTO?.id == song.id }
+    // 1. REMOVE @ObservedObject here
+    var audioManager: AudioManager
+    @ObservedObject var library: LibraryManager
+    var showArtwork: Bool = true
+    
+    // 2. Change isPlaying to State
+    @State private var isPlaying: Bool = false
     
     var body: some View {
         UniversalCustomSongRow(
@@ -791,10 +795,18 @@ struct CachedRemoteSongRow: View {
             showUnfilledBubble: song.hasLyrics || library.customRawLyrics[song.id] != nil,
             artwork: library.getCachedRemoteArtwork(albumName: song.album),
             isPlaying: isPlaying,
+            showArtwork: showArtwork,
             onTap: { audioManager.playStream(remoteSong: song, queue: [song]) }
         ) {
             Button { audioManager.playStream(remoteSong: song, queue: [song]) } label: { Label("Play", systemImage: "play") }
             Button { NotificationCenter.default.post(name: NSNotification.Name("ShowAddToPlaylist"), object: ["remote_\(song.id)"]) } label: { Label("Add to Playlist...", systemImage: "text.badge.plus") }
+        }
+        // 3. ONLY update when the current remote song actually changes
+        .onReceive(audioManager.$currentRemoteDTO) { currentDTO in
+            isPlaying = (currentDTO?.id == song.id)
+        }
+        .onAppear {
+            isPlaying = (audioManager.currentRemoteDTO?.id == song.id)
         }
     }
 }
@@ -1482,7 +1494,7 @@ struct PlaylistListView: View {
 // MARK: - UNIFIED Artists List
 struct ArtistListView: View {
     @ObservedObject var library: LibraryManager
-    @ObservedObject var audioManager: AudioManager
+    var audioManager: AudioManager
     @ObservedObject var downloads = DownloadsManager.shared
     
     @State private var searchText = ""
@@ -1651,7 +1663,7 @@ struct UnifiedArtistDetailView: View {
 // MARK: - UNIFIED Albums List
 struct AlbumListView: View {
     @ObservedObject var library: LibraryManager
-    @ObservedObject var audioManager: AudioManager
+    var audioManager: AudioManager
     @ObservedObject var downloads = DownloadsManager.shared
     
     @Binding var isSearching: Bool
@@ -2279,7 +2291,7 @@ struct AlbumDetailView: View {
 // MARK: - UNIFIED Songs List
 struct SongListView: View {
     @ObservedObject var library: LibraryManager
-    @ObservedObject var audioManager: AudioManager
+    var audioManager: AudioManager
     @ObservedObject var downloads = DownloadsManager.shared
     
     @Binding var isSearching: Bool
@@ -2361,7 +2373,8 @@ struct SongListView: View {
                                     } else if let remote = item.remoteSong {
                                         // Renders it greyed out automatically based on connection state
                                         CachedRemoteSongRow(song: remote, audioManager: audioManager, library: library)
-                                    Divider().padding(.leading)
+                                        Divider().padding(.leading)
+                                    }
                                 }
                             }
                         }
