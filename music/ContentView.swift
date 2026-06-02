@@ -432,55 +432,67 @@ struct PortraitLayout: View {
     var body: some View {
         NavigationStack(path: $navState.navigationPath) {
             LibraryHomeView(library: library, audioManager: audioManager, settings: settings, showSettings: $showSettings, navState: navState)
+                .toolbarBackground(.hidden, for: .navigationBar)
                 .navigationDestination(for: String.self) { destination in
-                    switch destination {
-                    case "Playlists": PlaylistListView(library: library, audioManager: audioManager, isSearching: .constant(false), showSettings: $showSettings)
-                    case "Artists": ArtistListView(library: library, audioManager: audioManager)
-                    case "Albums": AlbumListView(library: library, audioManager: audioManager, isSearching: .constant(false), showSettings: $showSettings)
-                    case "Songs": SongListView(library: library, audioManager: audioManager, isSearching: .constant(false), showArtwork: settings.showListArtwork, showSettings: $showSettings)
-                    case "Mac": RemoteLibraryWrapperView()
-                    case "RemoteArtists": RemoteArtistListView(multipeer: MultipeerManager.shared)
-                    case "RemoteAlbums": RemoteAlbumListView(multipeer: MultipeerManager.shared)
-                    case "RemoteSongs": RemoteSongListView(multipeer: MultipeerManager.shared)
-                    case "Genres":
-                        GenreListView(library: library, audioManager: audioManager)
-                    case "RemoteGenres":
-                        RemoteGenreListView(multipeer: MultipeerManager.shared)
-                    default: Text("Unknown Destination")
+                    Group {
+                        switch destination {
+                        case "Playlists": PlaylistListView(library: library, audioManager: audioManager, isSearching: .constant(false), showSettings: $showSettings)
+                        case "Artists": ArtistListView(library: library, audioManager: audioManager)
+                        case "Albums": AlbumListView(library: library, audioManager: audioManager, isSearching: .constant(false), showSettings: $showSettings)
+                        case "Songs": SongListView(library: library, audioManager: audioManager, isSearching: .constant(false), showArtwork: settings.showListArtwork, showSettings: $showSettings)
+                        case "Mac": RemoteLibraryWrapperView()
+                        case "RemoteArtists": RemoteArtistListView(multipeer: MultipeerManager.shared)
+                        case "RemoteAlbums": RemoteAlbumListView(multipeer: MultipeerManager.shared)
+                        case "RemoteSongs": RemoteSongListView(multipeer: MultipeerManager.shared)
+                        case "Genres": GenreListView(library: library, audioManager: audioManager)
+                        case "RemoteGenres": RemoteGenreListView(multipeer: MultipeerManager.shared)
+                        default: Text("Unknown Destination")
+                        }
                     }
+                    .toolbarBackground(.hidden, for: .navigationBar)
                 }
                 .navigationDestination(for: MPMediaItemCollection.self) { collection in
-                    if let rep = collection.representativeItem, rep.albumTitle != nil {
-                        AlbumDetailView(album: collection, audioManager: audioManager, library: library)
-                            .onAppear { navState.currentAlbumID = String(collection.persistentID) }
-                            .onDisappear { if navState.currentAlbumID == String(collection.persistentID) { navState.currentAlbumID = nil } }
+                    Group {
+                        if let rep = collection.representativeItem, rep.albumTitle != nil {
+                            AlbumDetailView(album: collection, audioManager: audioManager, library: library)
+                                .onAppear { navState.currentAlbumID = String(collection.persistentID) }
+                                .onDisappear { if navState.currentAlbumID == String(collection.persistentID) { navState.currentAlbumID = nil } }
+                        }
+                        else { PlaylistDetailView(playlist: collection, audioManager: audioManager, library: library) }
                     }
-                    else { PlaylistDetailView(playlist: collection, audioManager: audioManager, library: library) }
+                    .toolbarBackground(.hidden, for: .navigationBar)
                 }
                 .navigationDestination(for: UnifiedAlbumItem.self) { item in
                     DynamicAlbumWrapper(item: item, library: library, audioManager: audioManager)
                         .onAppear { navState.currentAlbumID = item.id }
                         .onDisappear { if navState.currentAlbumID == item.id { navState.currentAlbumID = nil } }
+                        .toolbarBackground(.hidden, for: .navigationBar)
                 }
                 .navigationDestination(for: UnifiedArtistItem.self) { item in
                     UnifiedArtistDetailView(item: item, library: library, audioManager: audioManager)
+                        .toolbarBackground(.hidden, for: .navigationBar)
                 }
                 .navigationDestination(for: RemoteAlbumWrapper.self) { wrapper in
                     UniversalAlbumDetailView(albumName: wrapper.name, collection: .remote(wrapper.songs))
                         .onAppear { navState.currentAlbumID = "remote_\(wrapper.name)" }
                         .onDisappear { if navState.currentAlbumID == "remote_\(wrapper.name)" { navState.currentAlbumID = nil } }
+                        .toolbarBackground(.hidden, for: .navigationBar)
                 }
                 .navigationDestination(for: RemoteArtistWrapper.self) { wrapper in
                     RemoteArtistDetailView(artistName: wrapper.name, multipeer: MultipeerManager.shared)
+                        .toolbarBackground(.hidden, for: .navigationBar)
                 }
                 .navigationDestination(for: StringWrapper.self) { wrapper in
                     ArtistDetailView(artist: wrapper.value, library: library, audioManager: audioManager)
+                        .toolbarBackground(.hidden, for: .navigationBar)
                 }
                 .navigationDestination(for: AppPlaylist.self) { playlist in
                     AppPlaylistDetailView(playlist: playlist)
+                        .toolbarBackground(.hidden, for: .navigationBar)
                 }
                 .navigationDestination(for: UnifiedPlaylistItem.self) { item in
                     UnifiedPlaylistDetailView(item: item, library: library, audioManager: audioManager)
+                        .toolbarBackground(.hidden, for: .navigationBar)
                 }
         }
         .accentColor(.pink)
@@ -493,7 +505,7 @@ struct PortraitLayout: View {
                let album = library.albums.first(where: { $0.persistentID == song.albumPersistentID }) {
                 
                 let targetAlbumID = String(album.persistentID)
-                if navState.currentAlbumID == targetAlbumID { return } // Already on page!
+                if navState.currentAlbumID == targetAlbumID { return }
                 
                 let item = UnifiedAlbumItem(
                     id: targetAlbumID,
@@ -504,7 +516,6 @@ struct PortraitLayout: View {
                     localWrapper: nil
                 )
                 
-                // Clear the stack and push safely
                 var newPath = NavigationPath()
                 newPath.append(item)
                 navState.navigationPath = newPath
@@ -513,7 +524,7 @@ struct PortraitLayout: View {
             } else if let localSong = DownloadsManager.shared.downloadedSongs.first(where: { $0.id == songId }) {
                 let albumName = localSong.album
                 let targetAlbumID = "local_\(albumName)"
-                if navState.currentAlbumID == targetAlbumID { return } // Already on page!
+                if navState.currentAlbumID == targetAlbumID { return }
                 
                 let songs = DownloadsManager.shared.downloadedSongs.filter { $0.album == albumName }
                 let item = UnifiedAlbumItem(
@@ -525,7 +536,6 @@ struct PortraitLayout: View {
                     localWrapper: LocalAlbumWrapper(name: albumName, songs: songs)
                 )
                 
-                // Clear the stack and push safely
                 var newPath = NavigationPath()
                 newPath.append(item)
                 navState.navigationPath = newPath
@@ -533,11 +543,9 @@ struct PortraitLayout: View {
             // 3. Check if it's a Remote Mac Stream
             } else if let remoteSong = audioManager.currentRemoteDTO, remoteSong.id == songId {
                 let targetAlbumID = "remote_\(remoteSong.album)"
-                if navState.currentAlbumID == targetAlbumID { return } // Already on page!
+                if navState.currentAlbumID == targetAlbumID { return }
                 
                 let item = RemoteAlbumWrapper(name: remoteSong.album, songs: [])
-                
-                // Clear the stack and push safely
                 var newPath = NavigationPath()
                 newPath.append(item)
                 navState.navigationPath = newPath
@@ -2261,8 +2269,7 @@ struct AlbumDetailView: View {
         .coordinateSpace(name: "albumScroll")
         .ignoresSafeArea(edges: library.isEdgeToEdgeEnabled(for: albumID) == true ? .top : [])
         .navigationBarTitleDisplayMode(.inline)
-        .toolbarBackground(library.isEdgeToEdgeEnabled(for: albumID) == true ? .hidden : .automatic, for: .navigationBar)
-        .toolbarColorScheme(library.isEdgeToEdgeEnabled(for: albumID) == true ? .dark : nil, for: .navigationBar)
+        .toolbarBackground(.hidden, for: .navigationBar) // <-- True transparency, no color scheme forcing a blur
         .sheet(isPresented: $showAlbumSettings) {
             let art = album.representativeItem?.artwork?.image(at: CGSize(width: 800, height: 800))
             AlbumSettingsSheet(albumID: albumID, artworkImage: art)

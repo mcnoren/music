@@ -2,15 +2,28 @@
 //  musicApp.swift
 //  music
 //
-//  Created by Matthew Noren on 12/10/25.
-//
 
 import SwiftUI
 
 @main
 struct musicApp: App {
-    // Inject the shared instance so the view observes its changes
     @StateObject private var downloads = DownloadsManager.shared
+    
+    init() {
+        let appearance = UINavigationBarAppearance()
+        appearance.configureWithTransparentBackground()
+        
+        // This is the "Nuke": passing an empty image forcefully prevents iOS from rendering a UIBlurEffect view.
+        appearance.backgroundImage = UIImage()
+        appearance.shadowImage = UIImage()
+        appearance.backgroundColor = .clear
+        appearance.backgroundEffect = nil
+        appearance.shadowColor = .clear
+        
+        UINavigationBar.appearance().standardAppearance = appearance
+        UINavigationBar.appearance().scrollEdgeAppearance = appearance
+        UINavigationBar.appearance().compactAppearance = appearance
+    }
     
     var body: some Scene {
         WindowGroup {
@@ -20,11 +33,9 @@ struct musicApp: App {
                         await downloads.importExternalURL(url)
                     }
                 }
-                // Add the loading overlay
                 .overlay {
                     if downloads.isImporting {
                         ZStack {
-                            // Dim the background to prevent user interaction while loading
                             Color.black.opacity(0.3).ignoresSafeArea()
                             
                             VStack(spacing: 16) {
@@ -40,7 +51,6 @@ struct musicApp: App {
                             .cornerRadius(16)
                             .shadow(radius: 10)
                         }
-                        // Smooth fade in and out
                         .transition(.opacity)
                         .animation(.easeInOut, value: downloads.isImporting)
                     }
