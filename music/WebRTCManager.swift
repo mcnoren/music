@@ -95,16 +95,23 @@ class WebRTCManager: NSObject, ObservableObject, AVAssetResourceLoaderDelegate {
         self.myDeviceId = myId
         self.targetDeviceId = targetId
         
-        startConnectionWatchdog() // <--- ADD THIS HERE
-        
+        startConnectionWatchdog()
         connectSignaling()
         setupPeerConnection()
         
-        if isInitiator { createOffer() }
+        if isInitiator {
+            // THE FIX: Give the WebSocket 2 seconds to establish the route on Render
+            // before blasting the SDP offers and ICE candidates over the wire.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+                self?.createOffer()
+            }
+        }
     }
     
     // MARK: - 2. Setup the P2P Connection
     private func setupPeerConnection() {
+        startConnectionWatchdog()
+        
         let config = LKRTCConfiguration()
         
         let stunServer = LKRTCIceServer(urlStrings: [
@@ -233,10 +240,12 @@ class WebRTCManager: NSObject, ObservableObject, AVAssetResourceLoaderDelegate {
                    let dict = try? JSONSerialization.jsonObject(with: data, options: []) as? [String: Any] {
                     self.handleSignalingMessage(dict)
                 }
+                self.listenToWebSocket() // Only continue listening on success
+                
             case .failure(let error):
                 print("WebSocket Error: \(error)")
+                self.handleWebSocketDisconnect() // Trigger your hard reset properly
             }
-            self.listenToWebSocket()
         }
     }
     
@@ -257,9 +266,10 @@ class WebRTCManager: NSObject, ObservableObject, AVAssetResourceLoaderDelegate {
             peerConnection?.setRemoteDescription(sdp, completionHandler: { _ in })
         } else if type == "candidate", let candidateDict = dict["candidate"] as? [String: Any],
                   let sdp = candidateDict["candidate"] as? String,
-                  let sdpMLineIndex = candidateDict["sdpMLineIndex"] as? Int32,
+                  let sdpMLineIndexInt = candidateDict["sdpMLineIndex"] as? Int, // 1. Parse as Int
                   let sdpMid = candidateDict["sdpMid"] as? String {
-            let candidate = LKRTCIceCandidate(sdp: sdp, sdpMLineIndex: sdpMLineIndex, sdpMid: sdpMid)
+            // 2. Convert to Int32 manually
+            let candidate = LKRTCIceCandidate(sdp: sdp, sdpMLineIndex: Int32(sdpMLineIndexInt), sdpMid: sdpMid)
             peerConnection?.add(candidate)
         }
     }
@@ -366,12 +376,11 @@ class WebRTCManager: NSObject, ObservableObject, AVAssetResourceLoaderDelegate {
     private func handleDisconnection() {
         guard !isIntentionallyDisconnected else { return }
         
-        // Attempt to reconnect every 5 seconds if the connection drops
         DispatchQueue.main.async {
             self.reconnectTimer?.invalidate()
             self.reconnectTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
                 print("Attempting to reconnect WebSocket...")
-                self?.connectToSignalingServer()
+                self?.connectSignaling() // Use the method that actually registers!
             }
         }
     }
@@ -767,11 +776,13 @@ extension WebRTCManager: LKRTCPeerConnectionDelegate, LKRTCDataChannelDelegate {
         DispatchQueue.main.async {
             self.connectionState = stateChanged
             
-            // <--- ADD THIS BLOCK --->
-            // If we connected successfully, cancel the timeout!
             if stateChanged == .connected || stateChanged == .completed {
                 self.connectionTimeoutTimer?.invalidate()
                 self.connectionTimeoutTimer = nil
+            } else if stateChanged == .failed || stateChanged == .disconnected {
+                // THE FIX: If the connection drops (like the iPhone walking away),
+                // don't let the Mac become a zombie. Nuke the state and restart!
+                self.performHardResetAndReconnect()
             }
         }
     }

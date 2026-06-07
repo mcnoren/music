@@ -719,29 +719,37 @@ struct SongRow: View {
     
     var isPlaying: Bool { audioManager.currentSong?.persistentID == song.persistentID }
     
-    var hasCustomRaw: Bool {
-        let id = String(song.persistentID)
-        return library.customRawLyrics[id] != nil && !library.customRawLyrics[id]!.isEmpty
-    }
-    var hasNativeRaw: Bool { return song.lyrics != nil && !song.lyrics!.isEmpty }
-    var showUnfilledBubble: Bool { return hasCustomRaw || hasNativeRaw }
-    
-    var body: some View {
-        ZStack {
-            if isPlaying {
-                Rectangle().fill(dominantColor.opacity(0.3)).mask(Rectangle()).onAppear { updateColor() }.onChange(of: isPlaying) { playing in if playing { updateColor() } }
+    var lyricState: Int {
+            let id = String(song.persistentID)
+            let syncedLines = library.getSyncedLyrics(id: id, title: song.title ?? "", artist: song.artist ?? "")
+            
+            if let lines = syncedLines, lines.hasValidSyncData {
+                return lines.isFullySynced ? 1 : 2
             }
             
-            HStack(spacing: 6) {
-                if library.isSystemFavorite(song: song) { Image(systemName: "star.fill").font(.caption2).foregroundColor(customSecondaryColor ?? .yellow).frame(width: 12) } else { Color.clear.frame(width: 12) }
-                
-                if library.hasSyncedLyrics(song: song) {
-                    Image(systemName: "quote.bubble.fill").font(.caption2).foregroundColor(customSecondaryColor ?? .pink).frame(width: 12)
-                } else if showUnfilledBubble {
-                    Image(systemName: "quote.bubble").font(.caption2).foregroundColor(customSecondaryColor ?? .gray).frame(width: 12)
-                } else {
-                    Color.clear.frame(width: 12)
+            let rawText = library.customRawLyrics[id] ?? song.lyrics
+            if rawText != nil && !rawText!.isEmpty { return 3 }
+            return 0
+        }
+        
+        var body: some View {
+            ZStack {
+                if isPlaying {
+                    Rectangle().fill(dominantColor.opacity(0.3)).mask(Rectangle()).onAppear { updateColor() }.onChange(of: isPlaying) { playing in if playing { updateColor() } }
                 }
+                
+                HStack(spacing: 6) {
+                    if library.isSystemFavorite(song: song) { Image(systemName: "star.fill").font(.caption2).foregroundColor(customSecondaryColor ?? .yellow).frame(width: 12) } else { Color.clear.frame(width: 12) }
+                    
+                    if lyricState == 1 {
+                        Image(systemName: "quote.bubble.fill").font(.caption2).foregroundColor(.red).frame(width: 12)
+                    } else if lyricState == 2 {
+                        Image(systemName: "quote.bubble").font(.caption2).foregroundColor(.red).frame(width: 12)
+                    } else if lyricState == 3 {
+                        Image(systemName: "quote.bubble.fill").font(.caption2).foregroundColor(.gray).frame(width: 12)
+                    } else {
+                        Color.clear.frame(width: 12)
+                    }
                 
                 if showTrackNumber {
                     if song.albumTrackNumber > 0 { Text("\(song.albumTrackNumber)").font(.caption).monospacedDigit().foregroundColor(customSecondaryColor ?? .gray).frame(width: 20, alignment: .trailing) } else { Color.clear.frame(width: 20) }
@@ -794,13 +802,23 @@ struct CachedRemoteSongRow: View {
     // 2. Change isPlaying to State
     @State private var isPlaying: Bool = false
     
+    var lyricState: Int {
+        let syncedLines = library.getSyncedLyrics(id: song.id, title: song.title, artist: song.artist)
+        if let lines = syncedLines, lines.hasValidSyncData {
+            return lines.isFullySynced ? 1 : 2
+        }
+        
+        let rawText = library.customRawLyrics[song.id]
+        if song.hasLyrics || (rawText != nil && !rawText!.isEmpty) { return 3 }
+        return 0
+    }
+    
     var body: some View {
         UniversalCustomSongRow(
             title: song.title,
             artist: song.artist,
             trackNumber: song.trackNumber,
-            hasSynced: song.hasSyncedLyrics || library.getSyncedLyrics(id: song.id, title: song.title, artist: song.artist) != nil,
-            showUnfilledBubble: song.hasLyrics || library.customRawLyrics[song.id] != nil,
+            lyricSyncState: lyricState,
             artwork: library.getCachedRemoteArtwork(albumName: song.album),
             isPlaying: isPlaying,
             showArtwork: showArtwork,
@@ -3788,7 +3806,7 @@ struct InlineLyricsView: View {
         } else {
             lines = nil
         }
-        guard let validLines = lines else { return nil }
+        guard let validLines = lines, validLines.hasValidSyncData else { return nil }
         var merged: [SyncedLyricLine] = []
         for line in validLines { if line.text == "[Instrumental]" { if !merged.isEmpty, merged.last?.text == "[Instrumental]" { if let newEnd = line.endTime { merged[merged.count - 1].endTime = newEnd }; continue } }; merged.append(line) }
         return merged
@@ -4521,8 +4539,7 @@ struct UniversalCustomSongRow<MenuContent: View>: View {
     let title: String
     let artist: String
     let trackNumber: Int
-    let hasSynced: Bool
-    let showUnfilledBubble: Bool
+    let lyricSyncState: Int
     let artwork: UIImage?
     let isPlaying: Bool
     
@@ -4548,10 +4565,12 @@ struct UniversalCustomSongRow<MenuContent: View>: View {
             HStack(spacing: 6) {
                 Color.clear.frame(width: 12)
                 
-                if hasSynced {
-                    Image(systemName: "quote.bubble.fill").font(.caption2).foregroundColor(customSecondaryColor ?? .pink).frame(width: 12)
-                } else if showUnfilledBubble {
-                    Image(systemName: "quote.bubble").font(.caption2).foregroundColor(customSecondaryColor ?? .gray).frame(width: 12)
+                if lyricSyncState == 1 {
+                    Image(systemName: "quote.bubble.fill").font(.caption2).foregroundColor(.red).frame(width: 12)
+                } else if lyricSyncState == 2 {
+                    Image(systemName: "quote.bubble").font(.caption2).foregroundColor(.red).frame(width: 12)
+                } else if lyricSyncState == 3 {
+                    Image(systemName: "quote.bubble.fill").font(.caption2).foregroundColor(.gray).frame(width: 12)
                 } else {
                     Color.clear.frame(width: 12)
                 }

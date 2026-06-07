@@ -19,8 +19,14 @@ struct SyncedLyricLine: Codable, Hashable {
 }
 
 extension Array where Element == SyncedLyricLine {
+    var hasValidSyncData: Bool {
+        // A song actually has sync data if at least one line has a timestamp > 0.
+        // This prevents freshly opened (but unsynced) editor files from counting.
+        return self.contains(where: { $0.startTime > 0 || ($0.endTime ?? 0) > 0 })
+    }
+    
     var isFullySynced: Bool {
-        guard !isEmpty else { return false }
+        guard hasValidSyncData else { return false }
         return self.last?.isUnsynced != true
     }
 }
@@ -531,24 +537,31 @@ class LibraryManager: ObservableObject {
             MultipeerManager.shared.syncLyricsDatabase(documents: syncedLyrics)
         }
     
-    // MARK: - Robust Lyrics Lookup
     func getSyncedLyrics(id: String, title: String, artist: String) -> [SyncedLyricLine]? {
+        var foundLines: [SyncedLyricLine]? = nil
+        
         // 1. Try exact ID match first (Fastest)
         if let match = syncedLyrics[id]?.lines, !match.isEmpty {
-            return match
+            foundLines = match
+        } else {
+            // 2. Fallback: Fuzzy match by Title and Artist (Fixes cross-platform ID mismatches)
+            let cleanTitle = title.lowercased().replacingOccurrences(of: " ", with: "")
+            let cleanArtist = artist.lowercased().replacingOccurrences(of: " ", with: "")
+            
+            for (_, doc) in syncedLyrics {
+                let docTitle = doc.songTitle.lowercased().replacingOccurrences(of: " ", with: "")
+                let docArtist = doc.artistName.lowercased().replacingOccurrences(of: " ", with: "")
+                
+                if docTitle == cleanTitle && docArtist == cleanArtist {
+                    foundLines = doc.lines
+                    break
+                }
+            }
         }
         
-        // 2. Fallback: Fuzzy match by Title and Artist (Fixes cross-platform ID mismatches)
-        let cleanTitle = title.lowercased().replacingOccurrences(of: " ", with: "")
-        let cleanArtist = artist.lowercased().replacingOccurrences(of: " ", with: "")
-        
-        for (_, doc) in syncedLyrics {
-            let docTitle = doc.songTitle.lowercased().replacingOccurrences(of: " ", with: "")
-            let docArtist = doc.artistName.lowercased().replacingOccurrences(of: " ", with: "")
-            
-            if docTitle == cleanTitle && docArtist == cleanArtist {
-                return doc.lines
-            }
+        // 3. Ensure lines actually contain timing data, otherwise treat as raw lyrics
+        if let lines = foundLines, lines.hasValidSyncData {
+            return lines
         }
         
         return nil

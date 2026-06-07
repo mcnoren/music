@@ -280,6 +280,26 @@ class DownloadsManager: ObservableObject {
         for song in songsToDelete {
             deleteSong(song)
         }
+        // Also remove this album from Pinned Albums and its cache so it doesn't ghost in the UI
+        let pinKey = "local_\(albumName)"
+        var currentPins = UserDefaults.standard.stringArray(forKey: "PinnedAlbumsPersistenceKey") ?? []
+        // Ensure legacy pins are prefixed consistently
+        currentPins = currentPins.map { $0.contains("_") ? $0 : "apple_\($0)" }
+        if currentPins.contains(pinKey) {
+            currentPins.removeAll { $0 == pinKey }
+            UserDefaults.standard.set(currentPins, forKey: "PinnedAlbumsPersistenceKey")
+        }
+        // Clear any cached pinned album metadata
+        var cache = LibraryManager.shared.pinnedAlbumCache
+        if cache[pinKey] != nil {
+            cache.removeValue(forKey: pinKey)
+            if let encoded = try? JSONEncoder().encode(cache) {
+                UserDefaults.standard.set(encoded, forKey: "PinnedAlbumCachePersistenceKey")
+            }
+            LibraryManager.shared.pinnedAlbumCache = cache
+        }
+        // Refresh the unified pinned list in memory/UI
+        LibraryManager.shared.loadPinnedAlbums()
     }
 }
 
@@ -589,18 +609,25 @@ struct DownloadsSongRow: View {
     // 2. Change isPlaying to State
     @State private var isPlaying: Bool = false
     
+    var lyricState: Int {
+        let syncedLines = song.syncedLyrics ?? library.getSyncedLyrics(id: song.id, title: song.title, artist: song.artist)
+        if let lines = syncedLines, lines.hasValidSyncData {
+            return lines.isFullySynced ? 1 : 2
+        }
+        
+        let rawText = library.customRawLyrics[song.id] ?? song.lyrics
+        if rawText != nil && !rawText!.isEmpty { return 3 }
+        return 0
+    }
+
     var body: some View {
         let artworkImage = song.artworkData != nil ? UIImage(data: song.artworkData!) : nil
-        let hasSynced = song.syncedLyrics?.isFullySynced == true || library.getSyncedLyrics(id: song.id, title: song.title, artist: song.artist)?.isFullySynced == true
-        let hasCustomRaw = library.customRawLyrics[song.id] != nil && !library.customRawLyrics[song.id]!.isEmpty
-        let hasNativeRaw = song.lyrics != nil && !song.lyrics!.isEmpty
         
         UniversalCustomSongRow(
             title: song.title,
             artist: song.artist,
             trackNumber: song.trackNumber,
-            hasSynced: hasSynced,
-            showUnfilledBubble: hasCustomRaw || hasNativeRaw,
+            lyricSyncState: lyricState,
             artwork: artworkImage,
             isPlaying: isPlaying,
             showArtwork: showArtwork,
@@ -769,3 +796,4 @@ extension DownloadsManager {
         return LocalSong(id: stableID, url: url, title: title, artist: artist, album: album, duration: duration, artworkData: artworkData, trackNumber: trackNumber, discNumber: discNumber, genre: genre, lyrics: lyrics)
     }
 }
+
