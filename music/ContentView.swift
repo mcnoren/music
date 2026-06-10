@@ -12,20 +12,6 @@ import LiveKitWebRTC
 import PhotosUI
 import CoreTransferable
 
-enum AlbumSortType: String, CaseIterable {
-    case titleAZ = "Title (A-Z)"
-    case titleZA = "Title (Z-A)"
-    case artistAZ = "Artist (A-Z)"
-    case trackCount = "Track Count"
-}
-
-enum AlbumFilterType: String, CaseIterable {
-    case all = "All Albums"
-    case full = "Full Albums (4+ Songs)"
-    case downloaded = "Downloaded to Device"
-    case remote = "Mac Library (Not Downloaded)"
-}
-
 // MARK: - Shared UI State (Preserves Layout Across Orientation)
 class PlayerUIState: ObservableObject {
     @Published var isPlayerExpanded = false

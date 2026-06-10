@@ -263,92 +263,40 @@ struct RemoteSongListView: View {
         if !searchText.isEmpty { try? await Task.sleep(nanoseconds: 250_000_000); if Task.isCancelled { return } }
         
         let currentSearch = searchText
-        let source = multipeer.remoteAlbums
-        let currentSort = sortType
-        let currentFilter = filterType
-        let currentGenre = selectedGenre
-        let fullLibrary = multipeer.remoteLibrary
+        let source = multipeer.remoteLibrary
         
-        // Safely extract download state before the detached task
-        let multipeer = MultipeerManager.shared
-        let downloadedAlbums = Set(DownloadsManager.shared.downloadedSongs.map { $0.album })
-        let downloadingAlbums = Set(multipeer.downloadQueue.map { $0.album })
-        var activeAlbumName: String? = nil
-        if let activeId = multipeer.activeDownloadId {
-            activeAlbumName = multipeer.remoteLibrary.first(where: { $0.id == activeId })?.album ?? multipeer.remoteContextQueue.first(where: { $0.id == activeId })?.album
-        }
-        
-        let results = await Task.detached { () -> ([RemoteAlbumSection], [String]) in
+        let results = await Task.detached { () -> [RemoteSongSection] in
             var filtered = source
             
-            // 0. Extract Available Genres dynamically
-            let albumGenres = Dictionary(grouping: fullLibrary, by: { $0.album }).mapValues { $0.first?.genre ?? "Unknown" }
-            let uniqueGenres = ["All Genres"] + Array(Set(albumGenres.values)).sorted()
-            
-            // 1. Filter Logic
-            let albumCounts = Dictionary(grouping: fullLibrary, by: { $0.album }).mapValues { $0.count }
-            if currentFilter == .full {
-                filtered = filtered.filter { (albumCounts[$0.name] ?? 0) >= 4 }
-            } else if currentFilter == .downloaded {
-                // Keep albums with downloaded songs AND albums currently in the queue
-                filtered = filtered.filter { album in
-                    downloadedAlbums.contains(album.name) ||
-                    downloadingAlbums.contains(album.name) ||
-                    album.name == activeAlbumName
-                }
-            }
-            
-            // 2. Filter by Genre
-            if currentGenre != "All Genres" {
-                filtered = filtered.filter { (albumGenres[$0.name] ?? "Unknown") == currentGenre }
-            }
-            
-            // 3. Search
+            // 1. Search Logic
             if !currentSearch.isEmpty {
-                filtered = filtered.filter { $0.name.localizedCaseInsensitiveContains(currentSearch) || $0.artist.localizedCaseInsensitiveContains(currentSearch) }
+                filtered = filtered.filter { $0.title.localizedCaseInsensitiveContains(currentSearch) || $0.artist.localizedCaseInsensitiveContains(currentSearch) }
             }
             
-            // 4. Group by Title or Artist Initial
-            let grouped = Dictionary(grouping: filtered) { summary -> String in
-                if currentSort == .trackCount { return "#" }
-                
-                let sortString = currentSort == .artistAZ ? summary.artist : summary.name
-                let prefix = sortString.prefix(1).uppercased()
+            // 2. Group by Title Initial
+            let grouped = Dictionary(grouping: filtered) { song -> String in
+                let prefix = song.title.prefix(1).uppercased()
                 return prefix.rangeOfCharacter(from: .letters) != nil ? prefix : "#"
             }
             
             let sortedKeys = grouped.keys.sorted { lhs, rhs in
                 if lhs == "#" { return false }
                 if rhs == "#" { return true }
-                return currentSort == .titleZA ? lhs > rhs : lhs < rhs
+                return lhs < rhs
             }
             
-            // 5. Sort within the groups
-            let sections = sortedKeys.map { letter in
-                let sortedAlbums = (grouped[letter] ?? []).sorted {
-                    switch currentSort {
-                    case .titleAZ: return $0.name < $1.name
-                    case .titleZA: return $0.name > $1.name
-                    case .artistAZ:
-                        if $0.artist == $1.artist { return $0.name < $1.name }
-                        return $0.artist < $1.artist
-                    case .trackCount:
-                        let count0 = albumCounts[$0.name] ?? 0
-                        let count1 = albumCounts[$1.name] ?? 0
-                        if count0 == count1 { return $0.name < $1.name }
-                        return count0 > count1
-                    }
-                }
-                return RemoteAlbumSection(letter: letter, albums: sortedAlbums)
+            // 3. Sort within the groups A-Z
+            return sortedKeys.map { letter in
+                let sortedSongs = (grouped[letter] ?? []).sorted { $0.title < $1.title }
+                return RemoteSongSection(letter: letter, songs: sortedSongs)
             }
-            
-            return (sections, uniqueGenres)
         }.value
         
         if !Task.isCancelled {
             await MainActor.run {
-                self.activeSections = results.0
-                self.availableGenres = results.1
+                self.activeSections = results
+                // Store the active queue to prevent massive CPU spikes during scrolling
+                self.activeQueue = results.flatMap { $0.songs }
             }
         }
     }
