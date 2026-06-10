@@ -12,7 +12,6 @@ import LiveKitWebRTC
 import PhotosUI
 import CoreTransferable
 
-// MARK: - Album Sorting & Filtering Enums
 enum AlbumSortType: String, CaseIterable {
     case titleAZ = "Title (A-Z)"
     case titleZA = "Title (Z-A)"
@@ -22,8 +21,9 @@ enum AlbumSortType: String, CaseIterable {
 
 enum AlbumFilterType: String, CaseIterable {
     case all = "All Albums"
-    case full = "Full Albums Only"
-    case downloaded = "Downloaded" // Add this new case
+    case full = "Full Albums (4+ Songs)"
+    case downloaded = "Downloaded to Device"
+    case remote = "Mac Library (Not Downloaded)"
 }
 
 // MARK: - Shared UI State (Preserves Layout Across Orientation)
