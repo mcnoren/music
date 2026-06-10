@@ -806,12 +806,6 @@ struct RemoteSongRow: View {
     }
 }
 
-enum AlbumFilterType: String, CaseIterable {
-    case all = "All Albums"
-    case full = "Full Albums Only"
-    case downloaded = "Downloaded"
-}
-
 // MARK: - Unified Album State
 enum AlbumSongCollection {
     case downloads([LocalSong])

@@ -22,9 +22,8 @@ enum AlbumSortType: String, CaseIterable {
 
 enum AlbumFilterType: String, CaseIterable {
     case all = "All Albums"
-    case full = "Full Albums (4+ Songs)"
-    case downloaded = "Downloaded to Device"
-    case remote = "Mac Library (Not Downloaded)"
+    case full = "Full Albums Only"
+    case downloaded = "Downloaded" // Add this new case
 }
 
 // MARK: - Shared UI State (Preserves Layout Across Orientation)
