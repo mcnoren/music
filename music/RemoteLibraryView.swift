@@ -260,32 +260,94 @@ struct RemoteSongListView: View {
     
     private func calculateSections() async {
         if !searchText.isEmpty { try? await Task.sleep(nanoseconds: 250_000_000); if Task.isCancelled { return } }
-        let currentSearch = searchText
-        let library = multipeer.remoteLibrary
         
-        let results = await Task.detached { () -> ([RemoteSongSection], [RemoteSongDTO]) in
-            var filtered = library
-            if !currentSearch.isEmpty {
-                filtered = filtered.filter { $0.title.localizedCaseInsensitiveContains(currentSearch) || $0.artist.localizedCaseInsensitiveContains(currentSearch) }
+        let currentSearch = searchText
+        let source = multipeer.remoteAlbums
+        let currentSort = sortType
+        let currentFilter = filterType
+        let currentGenre = selectedGenre
+        let fullLibrary = multipeer.remoteLibrary
+        
+        // Safely extract download state before the detached task
+        let multipeer = MultipeerManager.shared
+        let downloadedAlbums = Set(DownloadsManager.shared.downloadedSongs.map { $0.album })
+        let downloadingAlbums = Set(multipeer.downloadQueue.map { $0.album })
+        var activeAlbumName: String? = nil
+        if let activeId = multipeer.activeDownloadId {
+            activeAlbumName = multipeer.remoteLibrary.first(where: { $0.id == activeId })?.album ?? multipeer.remoteContextQueue.first(where: { $0.id == activeId })?.album
+        }
+        
+        let results = await Task.detached { () -> ([RemoteAlbumSection], [String]) in
+            var filtered = source
+            
+            // 0. Extract Available Genres dynamically
+            let albumGenres = Dictionary(grouping: fullLibrary, by: { $0.album }).mapValues { $0.first?.genre ?? "Unknown" }
+            let uniqueGenres = ["All Genres"] + Array(Set(albumGenres.values)).sorted()
+            
+            // 1. Filter Logic
+            let albumCounts = Dictionary(grouping: fullLibrary, by: { $0.album }).mapValues { $0.count }
+            if currentFilter == .full {
+                filtered = filtered.filter { (albumCounts[$0.name] ?? 0) >= 4 }
+            } else if currentFilter == .downloaded {
+                // Keep albums with downloaded songs AND albums currently in the queue
+                filtered = filtered.filter { album in
+                    downloadedAlbums.contains(album.name) ||
+                    downloadingAlbums.contains(album.name) ||
+                    album.name == activeAlbumName
+                }
             }
             
-            // Pre-sort so the queue matches the UI list natively
-            let sortedQueue = filtered.sorted { $0.title < $1.title }
+            // 2. Filter by Genre
+            if currentGenre != "All Genres" {
+                filtered = filtered.filter { (albumGenres[$0.name] ?? "Unknown") == currentGenre }
+            }
             
-            let grouped = Dictionary(grouping: sortedQueue) { song -> String in
-                let prefix = song.title.prefix(1).uppercased()
+            // 3. Search
+            if !currentSearch.isEmpty {
+                filtered = filtered.filter { $0.name.localizedCaseInsensitiveContains(currentSearch) || $0.artist.localizedCaseInsensitiveContains(currentSearch) }
+            }
+            
+            // 4. Group by Title or Artist Initial
+            let grouped = Dictionary(grouping: filtered) { summary -> String in
+                if currentSort == .trackCount { return "#" }
+                
+                let sortString = currentSort == .artistAZ ? summary.artist : summary.name
+                let prefix = sortString.prefix(1).uppercased()
                 return prefix.rangeOfCharacter(from: .letters) != nil ? prefix : "#"
             }
-            let sortedKeys = grouped.keys.sorted { lhs, rhs in if lhs == "#" { return false }; if rhs == "#" { return true }; return lhs < rhs }
             
-            let sections = sortedKeys.map { RemoteSongSection(letter: $0, songs: grouped[$0] ?? []) }
-            return (sections, sortedQueue)
+            let sortedKeys = grouped.keys.sorted { lhs, rhs in
+                if lhs == "#" { return false }
+                if rhs == "#" { return true }
+                return currentSort == .titleZA ? lhs > rhs : lhs < rhs
+            }
+            
+            // 5. Sort within the groups
+            let sections = sortedKeys.map { letter in
+                let sortedAlbums = (grouped[letter] ?? []).sorted {
+                    switch currentSort {
+                    case .titleAZ: return $0.name < $1.name
+                    case .titleZA: return $0.name > $1.name
+                    case .artistAZ:
+                        if $0.artist == $1.artist { return $0.name < $1.name }
+                        return $0.artist < $1.artist
+                    case .trackCount:
+                        let count0 = albumCounts[$0.name] ?? 0
+                        let count1 = albumCounts[$1.name] ?? 0
+                        if count0 == count1 { return $0.name < $1.name }
+                        return count0 > count1
+                    }
+                }
+                return RemoteAlbumSection(letter: letter, albums: sortedAlbums)
+            }
+            
+            return (sections, uniqueGenres)
         }.value
         
         if !Task.isCancelled {
             await MainActor.run {
                 self.activeSections = results.0
-                self.activeQueue = results.1
+                self.availableGenres = results.1
             }
         }
     }
@@ -744,6 +806,12 @@ struct RemoteSongRow: View {
     }
 }
 
+enum AlbumFilterType: String, CaseIterable {
+    case all = "All Albums"
+    case full = "Full Albums Only"
+    case downloaded = "Downloaded"
+}
+
 // MARK: - Unified Album State
 enum AlbumSongCollection {
     case downloads([LocalSong])
@@ -780,6 +848,24 @@ struct UniversalAlbumDetailView: View {
     }
     
     var computedActiveSongs: AlbumSongCollection {
+        // ALWAYS Prioritize the full remote tracklist if we are connected to the Mac!
+        // This stops the view from "erasing" non-downloaded songs when the download finishes.
+        if multipeer.connectionState == .connected, !multipeer.remoteContextQueue.isEmpty, multipeer.remoteContextQueue.first?.album == albumName {
+            let current = multipeer.remoteContextQueue.sorted {
+                let d0 = $0.discNumber ?? 1
+                let d1 = $1.discNumber ?? 1
+                if d0 == d1 {
+                    if $0.trackNumber == $1.trackNumber { return $0.title < $1.title }
+                    if $0.trackNumber == 0 { return false }
+                    if $1.trackNumber == 0 { return true }
+                    return $0.trackNumber < $1.trackNumber
+                }
+                return d0 < d1
+            }
+            return .remote(current)
+        }
+        
+        // Fallback for Local/Offline Playback
         switch collection {
         case .downloads(_):
             let current = downloads.downloadedSongs
@@ -799,18 +885,7 @@ struct UniversalAlbumDetailView: View {
             
         case .remote(let passedSongs):
             let source = multipeer.remoteContextQueue.isEmpty ? passedSongs : multipeer.remoteContextQueue
-            let current = source
-                .sorted {
-                    let d0 = $0.discNumber ?? 1
-                    let d1 = $1.discNumber ?? 1
-                    if d0 == d1 {
-                        if $0.trackNumber == $1.trackNumber { return $0.title < $1.title }
-                        if $0.trackNumber == 0 { return false }
-                        if $1.trackNumber == 0 { return true }
-                        return $0.trackNumber < $1.trackNumber
-                    }
-                    return d0 < d1
-                }
+            let current = source.sorted { $0.trackNumber < $1.trackNumber }
             return .remote(current)
         }
     }
@@ -1202,11 +1277,11 @@ struct UniversalAlbumDetailView: View {
         .coordinateSpace(name: "albumScroll")
         .ignoresSafeArea(edges: library.isEdgeToEdgeEnabled(for: albumID) == true ? .top : [])
         .onAppear {
-            if case .remote(_) = collection {
-                if multipeer.connectionState == .connected {
-                    multipeer.remoteContextQueue = []
-                    multipeer.sendCommand("REQUEST_ALBUM_SONGS:\(albumName)")
-                }
+            // Fetch full remote tracklist regardless of how the album was opened,
+            // as long as we are connected to the Mac!
+            if multipeer.connectionState == .connected {
+                multipeer.remoteContextQueue = []
+                multipeer.sendCommand("REQUEST_ALBUM_SONGS:\(albumName)")
             }
         }
         .onChange(of: multipeer.remoteContextQueue) { newQueue in
@@ -1265,7 +1340,11 @@ struct UniversalAlbumDetailView: View {
         if h > 0 { return "\(h) hr \(m) min" }
         return "\(m) min"
     }
-    
+    enum AlbumFilterType: String, CaseIterable {
+        case all = "All Albums"
+        case full = "Full Albums Only"
+        case downloaded = "Downloaded"
+    }
     func playAlbum(songs: AlbumSongCollection) {
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         switch songs {

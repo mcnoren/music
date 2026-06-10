@@ -318,21 +318,27 @@ class MultipeerManager: NSObject, ObservableObject {
     
     // MARK: - Sequential Queue Logic
     func enqueueDownloads(songs: [RemoteSongDTO]) {
-        // Enforce Track List Order
+        // Strictly sort by Disc Number, then Track Number. Fallback to Title.
         let sortedSongs = songs.sorted {
             let d0 = $0.discNumber ?? 1
             let d1 = $1.discNumber ?? 1
-            if d0 == d1 { return $0.trackNumber < $1.trackNumber }
+            if d0 == d1 {
+                if $0.trackNumber == $1.trackNumber { return $0.title < $1.title }
+                if $0.trackNumber == 0 { return false } // Push missing track numbers to the end
+                if $1.trackNumber == 0 { return true }
+                return $0.trackNumber < $1.trackNumber
+            }
             return d0 < d1
         }
         
         var didAdd = false
         for song in sortedSongs {
+            // Prevent duplicate queueing
             if downloadQueue.contains(where: { $0.id == song.id }) { continue }
             if activeDownloadId == song.id { continue }
             
             #if os(iOS)
-            // Skip if already downloaded to local library
+            // Skip songs that are already fully downloaded locally
             if DownloadsManager.shared.downloadedSongs.contains(where: { $0.id == song.id }) { continue }
             #endif
             
@@ -764,7 +770,7 @@ extension MultipeerManager: MCSessionDelegate, MCNearbyServiceAdvertiserDelegate
                 } catch {
                     print("Stream save error: \(error)")
                 }
-            } else {
+            } else if resourceName != "LIBRARY_METADATA_SYNC" {
                 guard let documents = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
                 let destinationURL = documents.appendingPathComponent(resourceName)
                 
@@ -774,16 +780,12 @@ extension MultipeerManager: MCSessionDelegate, MCNearbyServiceAdvertiserDelegate
                     try fileManager.setAttributes([.protectionKey: FileProtectionType.none], ofItemAtPath: destinationURL.path)
                     
                     NotificationCenter.default.post(name: NSNotification.Name("NewDownloadComplete"), object: nil)
-                    
-                    self.downloadMessage = "Successfully downloaded \(resourceName)!"
-                    self.showDownloadAlert = true
-                    
                 } catch {
-                    self.downloadMessage = "Failed to save file: \(error.localizedDescription)"
-                    self.showDownloadAlert = true
+                    print("Failed to save file: \(error)")
                 }
                 
                 // --- PROGRESS THE QUEUE ---
+                // Remove the finished song and trigger the next one!
                 if let activeId = self.activeDownloadId {
                     self.downloadQueue.removeAll { $0.id == activeId }
                     self.activeDownloadId = nil
