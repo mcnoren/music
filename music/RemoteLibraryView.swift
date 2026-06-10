@@ -11,6 +11,7 @@ import LiveKitWebRTC
 
 // MARK: - Navigation Wrappers
 
+
 struct RemoteSongSection: Identifiable {
     let id = UUID()
     let letter: String
@@ -1334,11 +1335,7 @@ struct UniversalAlbumDetailView: View {
         if h > 0 { return "\(h) hr \(m) min" }
         return "\(m) min"
     }
-    enum AlbumFilterType: String, CaseIterable {
-        case all = "All Albums"
-        case full = "Full Albums Only"
-        case downloaded = "Downloaded"
-    }
+    
     func playAlbum(songs: AlbumSongCollection) {
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         switch songs {
