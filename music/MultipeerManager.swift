@@ -185,6 +185,11 @@ class MultipeerManager: NSObject, ObservableObject {
     // MARK: - Lazy Loading Properties
     @Published var requestedArtworkAlbums: Set<String> = []
     
+    // MARK: - Download Queue Properties
+    @Published var activeDownloadId: String? = nil
+    @Published var downloadQueue: [RemoteSongDTO] = []
+    private let downloadQueueKey = "SavedDownloadQueue"
+    
     func requestArtworkLazily(for song: RemoteSongDTO) {
         #if os(iOS)
         let album = song.album
@@ -196,16 +201,6 @@ class MultipeerManager: NSObject, ObservableObject {
             sendCommand("REQUEST_ARTWORK:\(song.id)")
         }
         #endif
-    }
-    
-    func cancelDownloads(for albumName: String) {
-        DispatchQueue.main.async {
-            let tasksToRemove = self.currentDownloads.values.filter { $0.metadata?.album == albumName }
-            for task in tasksToRemove {
-                self.cancelledDownloads.insert(task.id)
-                self.currentDownloads.removeValue(forKey: task.id)
-            }
-        }
     }
     
     #if os(macOS)
@@ -265,6 +260,13 @@ class MultipeerManager: NSObject, ObservableObject {
         }
         
         super.init()
+        
+        // Resume queue from previous sessions
+        if let data = UserDefaults.standard.data(forKey: downloadQueueKey),
+           let saved = try? JSONDecoder().decode([RemoteSongDTO].self, from: data) {
+            self.downloadQueue = saved
+        }
+        
         setupSession()
         
         #if os(iOS)
@@ -311,6 +313,71 @@ class MultipeerManager: NSObject, ObservableObject {
             self.connectedPeers = []
             self.isCastingToMac = false
             self.latestPayload?.isCasting = false
+        }
+    }
+    
+    // MARK: - Sequential Queue Logic
+    func enqueueDownloads(songs: [RemoteSongDTO]) {
+        // Enforce Track List Order
+        let sortedSongs = songs.sorted {
+            let d0 = $0.discNumber ?? 1
+            let d1 = $1.discNumber ?? 1
+            if d0 == d1 { return $0.trackNumber < $1.trackNumber }
+            return d0 < d1
+        }
+        
+        var didAdd = false
+        for song in sortedSongs {
+            if downloadQueue.contains(where: { $0.id == song.id }) { continue }
+            if activeDownloadId == song.id { continue }
+            
+            #if os(iOS)
+            // Skip if already downloaded to local library
+            if DownloadsManager.shared.downloadedSongs.contains(where: { $0.id == song.id }) { continue }
+            #endif
+            
+            downloadQueue.append(song)
+            didAdd = true
+        }
+        
+        if didAdd { saveDownloadQueue() }
+        processNextDownload()
+    }
+    
+    func processNextDownload() {
+        guard activeDownloadId == nil, let nextSong = downloadQueue.first else { return }
+        guard connectionState == .connected else { return }
+        
+        activeDownloadId = nextSong.id
+        sendCommand("DOWNLOAD_SONG:\(nextSong.id)")
+    }
+    
+    private func saveDownloadQueue() {
+        if let encoded = try? JSONEncoder().encode(downloadQueue) {
+            UserDefaults.standard.set(encoded, forKey: downloadQueueKey)
+        }
+    }
+    
+    func cancelDownloads(for albumName: String) {
+        DispatchQueue.main.async {
+            // Clear from queue
+            self.downloadQueue.removeAll { $0.album == albumName }
+            self.saveDownloadQueue()
+            
+            // Clear active network tasks
+            let tasksToRemove = self.currentDownloads.values.filter { $0.metadata?.album == albumName }
+            for task in tasksToRemove {
+                self.cancelledDownloads.insert(task.id)
+                self.currentDownloads.removeValue(forKey: task.id)
+            }
+            
+            // If the active download was part of this cancelled album, clear it
+            if let activeId = self.activeDownloadId,
+               let activeSong = self.remoteLibrary.first(where: { $0.id == activeId }) ?? self.remoteContextQueue.first(where: { $0.id == activeId }),
+               activeSong.album == albumName {
+                self.activeDownloadId = nil
+                self.processNextDownload()
+            }
         }
     }
     
@@ -377,6 +444,7 @@ class MultipeerManager: NSObject, ObservableObject {
 
 extension MultipeerManager: MCSessionDelegate, MCNearbyServiceAdvertiserDelegate, MCNearbyServiceBrowserDelegate {
     
+    // 1. Connection State Changes
     func session(_ session: MCSession, peer peerID: MCPeerID, didChange state: MCSessionState) {
         DispatchQueue.main.async {
             self.connectedPeers = session.connectedPeers
@@ -386,6 +454,11 @@ extension MultipeerManager: MCSessionDelegate, MCNearbyServiceAdvertiserDelegate
                 #if os(iOS)
                 self.syncLyricsDatabase(documents: LibraryManager.shared.syncedLyrics)
                 self.sendCommand("REQUEST_LIBRARY")
+                
+                // Pick up downloads where we left off!
+                self.activeDownloadId = nil
+                self.processNextDownload()
+                
                 #elseif os(macOS)
                 DispatchQueue.main.async { self.onPeerConnected?() }
                 #endif
@@ -406,6 +479,7 @@ extension MultipeerManager: MCSessionDelegate, MCNearbyServiceAdvertiserDelegate
         }
     }
     
+    // 2. Receiving Short Text/JSON Data
     func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
         DispatchQueue.main.async {
             var isHandled = false
@@ -447,17 +521,12 @@ extension MultipeerManager: MCSessionDelegate, MCNearbyServiceAdvertiserDelegate
                 #if os(iOS)
                 LibraryManager.shared.saveCachedRemoteMetadata(libraryPayload.masterLibrary)
                 
-                // SMART PRE-FETCH ON CONNECTION:
-                // Loop through the library, find unique albums, and request art ONLY if it's missing
                 var processedAlbums: Set<String> = []
                 for song in libraryPayload.masterLibrary {
                     let album = song.album
                     if !processedAlbums.contains(album) {
                         processedAlbums.insert(album)
-                        
-                        // Check if we already have it cached from a previous session
                         if LibraryManager.shared.getCachedRemoteArtwork(albumName: album) == nil {
-                            // We don't have it, ask the Mac for it!
                             self.sendCommand("REQUEST_ARTWORK:\(song.id)")
                         }
                     }
@@ -555,6 +624,14 @@ extension MultipeerManager: MCSessionDelegate, MCNearbyServiceAdvertiserDelegate
                 } else if syncCmd.command.hasPrefix("DOWNLOAD_ERROR:") {
                     self.downloadMessage = syncCmd.command.replacingOccurrences(of: "DOWNLOAD_ERROR:", with: "")
                     self.showDownloadAlert = true
+                    
+                    // Recover queue on error
+                    if let activeId = self.activeDownloadId {
+                        self.downloadQueue.removeAll { $0.id == activeId }
+                        self.activeDownloadId = nil
+                        self.saveDownloadQueue()
+                    }
+                    self.processNextDownload()
                 }
                 #elseif os(macOS)
                 if syncCmd.command == "REQUEST_LIBRARY" {
@@ -631,9 +708,10 @@ extension MultipeerManager: MCSessionDelegate, MCNearbyServiceAdvertiserDelegate
             return true
         }
         
-        return false // Not valid JSON
+        return false
     }
-    
+
+    // 3. Start Receiving File Streams
     func session(_ session: MCSession, didStartReceivingResourceWithName resourceName: String, fromPeer peerID: MCPeerID, with progress: Progress) {
         DispatchQueue.main.async {
             if resourceName == "LIBRARY_METADATA_SYNC" {
@@ -652,6 +730,7 @@ extension MultipeerManager: MCSessionDelegate, MCNearbyServiceAdvertiserDelegate
         }
     }
     
+    // 4. Finish Receiving File Streams
     func session(_ session: MCSession, didFinishReceivingResourceWithName resourceName: String, fromPeer peerID: MCPeerID, at localURL: URL?, withError error: (any Error)?) {
         guard let tempURL = localURL else { return }
         
@@ -703,11 +782,20 @@ extension MultipeerManager: MCSessionDelegate, MCNearbyServiceAdvertiserDelegate
                     self.downloadMessage = "Failed to save file: \(error.localizedDescription)"
                     self.showDownloadAlert = true
                 }
+                
+                // --- PROGRESS THE QUEUE ---
+                if let activeId = self.activeDownloadId {
+                    self.downloadQueue.removeAll { $0.id == activeId }
+                    self.activeDownloadId = nil
+                    self.saveDownloadQueue()
+                }
+                self.processNextDownload()
             }
         }
         #endif
     }
     
+    // 5. Streams & Discovery Callbacks
     func session(_ session: MCSession, didReceive stream: InputStream, withName streamName: String, fromPeer peerID: MCPeerID) {}
     func browser(_ browser: MCNearbyServiceBrowser, foundPeer peerID: MCPeerID, withDiscoveryInfo info: [String : String]?) { browser.invitePeer(peerID, to: session, withContext: nil, timeout: 10) }
     func browser(_ browser: MCNearbyServiceBrowser, lostPeer peerID: MCPeerID) {}

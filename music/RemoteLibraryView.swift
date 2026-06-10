@@ -637,7 +637,6 @@ struct RemoteSongRow: View {
     
     var isPlaying: Bool { AudioManager.shared.currentRemoteDTO?.id == song.id }
     
-    // --- LYRICS COMPUTED PROPERTIES ---
     var hasSynced: Bool {
         if let lines = library.getSyncedLyrics(id: song.id, title: song.title, artist: song.artist) {
             return lines.isFullySynced
@@ -653,13 +652,13 @@ struct RemoteSongRow: View {
         return hasCustomRaw || song.hasLyrics
     }
     
+    var isDownloading: Bool { multipeer.activeDownloadId == song.id }
+    var isQueued: Bool { multipeer.downloadQueue.contains { $0.id == song.id } }
+    
     var body: some View {
-        HStack(spacing: 6) { // Strict 6px spacing to match local lists
-            
-            // 1. Reserved Star Space (Mac doesn't have local favorites yet, but we must leave space!)
+        HStack(spacing: 6) {
             Color.clear.frame(width: 12)
             
-            // 2. Lyric Space
             if hasSynced {
                 Image(systemName: "quote.bubble.fill").font(.caption2).foregroundColor(customSecondaryColor ?? .pink).frame(width: 12)
             } else if showUnfilledBubble {
@@ -668,7 +667,6 @@ struct RemoteSongRow: View {
                 Color.clear.frame(width: 12)
             }
             
-            // 3. Track Number
             if showTrackNumber {
                 if song.trackNumber > 0 {
                     Text("\(song.trackNumber)").font(.caption).monospacedDigit().foregroundColor(customSecondaryColor ?? .gray).frame(width: 20, alignment: .trailing)
@@ -677,7 +675,6 @@ struct RemoteSongRow: View {
                 }
             }
             
-            // 4. Artwork
             if showArtwork {
                 if let cached = library.getCachedRemoteArtwork(albumName: song.album) {
                     Image(uiImage: cached).resizable().frame(width: 40, height: 40).cornerRadius(6)
@@ -685,9 +682,7 @@ struct RemoteSongRow: View {
                     Image(uiImage: uiImage).resizable().frame(width: 40, height: 40).cornerRadius(6)
                 } else {
                     Rectangle().fill(Color.gray.opacity(0.3)).frame(width: 40, height: 40).cornerRadius(6).overlay(Image(systemName: "music.note").foregroundColor(.gray))
-                        .onAppear {
-                            multipeer.requestArtworkLazily(for: song)
-                        }
+                        .onAppear { multipeer.requestArtworkLazily(for: song) }
                 }
             }
             Spacer().frame(width: 4)
@@ -710,14 +705,16 @@ struct RemoteSongRow: View {
             Spacer()
             
             Menu {
-                if multipeer.currentDownloads[song.id] != nil {
+                if isDownloading {
                     Text("Downloading...")
+                } else if isQueued {
+                    Text("Queued...")
                 } else {
-                    Button { multipeer.sendCommand("DOWNLOAD_SONG:\(song.id)") } label: { Label("Download to iPhone", systemImage: "arrow.down.circle") }
+                    Button { multipeer.enqueueDownloads(songs: [song]) } label: { Label("Download to iPhone", systemImage: "arrow.down.circle") }
                 }
                 Button { multipeer.sendCommand("PLAY_SONG:\(song.id)") } label: { Label("Play on Mac", systemImage: "macwindow") }
             } label: {
-                if let task = multipeer.currentDownloads[song.id] {
+                if isDownloading, let task = multipeer.currentDownloads.values.first(where: { $0.metadata?.title == song.title && $0.metadata?.album == song.album }) {
                     ZStack {
                         Circle().stroke(Color.pink.opacity(0.3), lineWidth: 2)
                         Circle().trim(from: 0, to: task.fractionCompleted)
@@ -725,6 +722,10 @@ struct RemoteSongRow: View {
                             .rotationEffect(.degrees(-90))
                             .animation(.linear(duration: 0.2), value: task.fractionCompleted)
                     }.frame(width: 20, height: 20).padding(5)
+                } else if isDownloading {
+                    ProgressView().progressViewStyle(CircularProgressViewStyle(tint: .pink)).frame(width: 20, height: 20).padding(5)
+                } else if isQueued {
+                    Image(systemName: "arrow.down.circle.dotted").foregroundColor(.gray).font(.title3).frame(width: 30, height: 30)
                 } else {
                     Image(systemName: "ellipsis").foregroundColor(.pink).font(.title3).frame(width: 30, height: 30).contentShape(Rectangle())
                 }
@@ -738,7 +739,6 @@ struct RemoteSongRow: View {
         .onTapGesture {
             let impact = UIImpactFeedbackGenerator(style: .medium)
             impact.impactOccurred()
-            
             AudioManager.shared.playStream(remoteSong: song, queue: queue)
         }
     }
@@ -840,10 +840,12 @@ struct UniversalAlbumDetailView: View {
         let totalDuration: TimeInterval = { switch activeSongs { case .downloads(let songs): return songs.reduce(0) { $0 + $1.duration }; case .remote(let songs): return songs.reduce(0) { $0 + $1.duration } } }()
         let albumGenre: String = { switch activeSongs { case .downloads(let songs): return songs.first?.genre ?? "Album"; case .remote(let songs): return songs.first?.genre ?? "Album" } }()
         
-        let isDownloading = !multipeer.currentDownloads.values.filter { $0.metadata?.album == albumName }.isEmpty
+        let isDownloading = multipeer.downloadQueue.contains(where: { $0.album == albumName }) ||
+                            (multipeer.activeDownloadId != nil && (multipeer.remoteLibrary.first(where: { $0.id == multipeer.activeDownloadId })?.album == albumName || multipeer.remoteContextQueue.first(where: { $0.id == multipeer.activeDownloadId })?.album == albumName)) ||
+                            !multipeer.currentDownloads.values.filter { $0.metadata?.album == albumName }.isEmpty
+                            
         let isEdgeToEdge = library.isEdgeToEdgeEnabled(for: albumID) == true
         
-        // NEW: Unify the originalArtwork computed property to cleanly grab the cached image
         let originalArtwork: UIImage? = {
             switch activeSongs {
             case .downloads(let songs):
@@ -980,7 +982,7 @@ struct UniversalAlbumDetailView: View {
                                         }
                                         .font(.title3.bold())
                                         .foregroundColor(customBgColor != nil ? customBgColor : Color(.systemBackground))
-                                        .frame(width: 140, height: 50) // <-- FIXED WIDTH AND TALLER HEIGHT
+                                        .frame(width: 140, height: 50)
                                         .background(albumTextColor)
                                         .clipShape(Capsule())
                                         .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
@@ -1000,7 +1002,7 @@ struct UniversalAlbumDetailView: View {
                                             .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
                                     }
                                 }
-                                .offset(y: 30) // Or .padding(.horizontal, 20) for the other layout
+                                .offset(y: 30)
                                 .opacity(isDisconnectedRemote ? 0.4 : 1.0)
                                 .disabled(isDisconnectedRemote)
                             }
@@ -1022,7 +1024,7 @@ struct UniversalAlbumDetailView: View {
                                         HStack { Image(systemName: "xmark.circle.fill"); Text("Cancel Download") }.font(.headline).foregroundColor(.red).padding(.vertical, 8).padding(.horizontal, 16).background(Color.red.opacity(0.1)).cornerRadius(20)
                                     }.padding(.top, 16)
                                 } else if songCount > 0 {
-                                    Button(action: { UIImpactFeedbackGenerator(style: .medium).impactOccurred(); for song in remoteQueue { multipeer.sendCommand("DOWNLOAD_SONG:\(song.id)") } }) {
+                                    Button(action: { UIImpactFeedbackGenerator(style: .medium).impactOccurred(); multipeer.enqueueDownloads(songs: remoteQueue) }) {
                                         HStack { Image(systemName: "arrow.down.circle.fill"); Text("Download Album") }.font(.headline).foregroundColor(.pink).padding(.vertical, 8).padding(.horizontal, 16).background(Color.pink.opacity(0.1)).cornerRadius(20)
                                     }.padding(.top, 16)
                                 }
@@ -1035,7 +1037,7 @@ struct UniversalAlbumDetailView: View {
                                     text: desc,
                                     albumTitle: albumName,
                                     backgroundColor: currentBgColor,
-                                    textColor: songTextColor // <-- Pass the adaptive color
+                                    textColor: songTextColor
                                 )
                                 .padding(.horizontal, 24)
                                 .padding(.top, 16)
@@ -1046,7 +1048,6 @@ struct UniversalAlbumDetailView: View {
                         .padding(.top, 0)
                     } else {
                         VStack(spacing: 16) {
-                            // Add the video check here for the standard layout
                             if let videoURL = library.albumVideoArt[albumID] {
                                 AnimatedVideoArtView(videoURL: videoURL, crop: library.albumArtCrops[albumID])
                                     .frame(width: 250, height: 250)
@@ -1091,7 +1092,7 @@ struct UniversalAlbumDetailView: View {
                                     }
                                     .font(.title3.bold())
                                     .foregroundColor(customBgColor != nil ? customBgColor : Color(.systemBackground))
-                                    .frame(width: 140, height: 50) // <-- FIXED WIDTH AND TALLER HEIGHT
+                                    .frame(width: 140, height: 50)
                                     .background(albumTextColor)
                                     .clipShape(Capsule())
                                 }
@@ -1116,7 +1117,7 @@ struct UniversalAlbumDetailView: View {
                                         HStack { Image(systemName: "xmark.circle.fill"); Text("Cancel Download") }.font(.headline).foregroundColor(.red).padding(.vertical, 8).padding(.horizontal, 16).background(Color.red.opacity(0.1)).cornerRadius(20)
                                     }.padding(.top, 4)
                                 } else if songCount > 0 {
-                                    Button(action: { UIImpactFeedbackGenerator(style: .medium).impactOccurred(); for song in remoteQueue { multipeer.sendCommand("DOWNLOAD_SONG:\(song.id)") } }) {
+                                    Button(action: { UIImpactFeedbackGenerator(style: .medium).impactOccurred(); multipeer.enqueueDownloads(songs: remoteQueue) }) {
                                         HStack { Image(systemName: "arrow.down.circle.fill"); Text("Download Album") }.font(.headline).foregroundColor(.pink).padding(.vertical, 8).padding(.horizontal, 16).background(Color.pink.opacity(0.1)).cornerRadius(20)
                                     }.padding(.top, 4)
                                 }
@@ -1241,7 +1242,7 @@ struct UniversalAlbumDetailView: View {
                             if isDownloading {
                                 Button(role: .destructive) { UIImpactFeedbackGenerator(style: .medium).impactOccurred(); multipeer.cancelDownloads(for: albumName) } label: { Label("Cancel Download", systemImage: "xmark.circle") }
                             } else {
-                                Button { UIImpactFeedbackGenerator(style: .medium).impactOccurred(); for song in remoteQueue { multipeer.sendCommand("DOWNLOAD_SONG:\(song.id)") } } label: { Label("Download Album", systemImage: "arrow.down.circle") }
+                                Button { UIImpactFeedbackGenerator(style: .medium).impactOccurred(); multipeer.enqueueDownloads(songs: remoteQueue) } label: { Label("Download Album", systemImage: "arrow.down.circle") }
                             }
                         }
                     } label: { Image(systemName: "ellipsis.circle").foregroundColor(.pink) }
@@ -1286,7 +1287,6 @@ struct UniversalAlbumDetailView: View {
         }
     }
 }
-
 // MARK: - Live Album Progress Overlay
 struct AlbumProgressOverlay: View {
     let albumName: String
@@ -1296,14 +1296,17 @@ struct AlbumProgressOverlay: View {
     
     var body: some View {
         let albumTasks = multipeer.currentDownloads.values.filter { $0.metadata?.album == albumName }
-        if !albumTasks.isEmpty {
+        let queuedCount = multipeer.downloadQueue.filter { $0.album == albumName }.count
+        let isActiveHere = multipeer.activeDownloadId != nil && (multipeer.remoteLibrary.first(where: { $0.id == multipeer.activeDownloadId })?.album == albumName || multipeer.remoteContextQueue.first(where: { $0.id == multipeer.activeDownloadId })?.album == albumName)
+
+        if !albumTasks.isEmpty || queuedCount > 0 || isActiveHere {
             ZStack(alignment: .leading) {
                 Rectangle().fill(Material.ultraThin).frame(height: 30)
                 GeometryReader { geo in
                     Rectangle().fill(Color.pink.opacity(0.6)).frame(width: geo.size.width * CGFloat(progress))
                         .animation(.linear(duration: 0.1), value: progress)
                 }
-                Text("Downloading...").font(.caption2.bold()).foregroundColor(.white).padding(.leading, 8)
+                Text(albumTasks.isEmpty ? "Queued (\(queuedCount))..." : "Downloading...").font(.caption2.bold()).foregroundColor(.white).padding(.leading, 8)
             }
             .frame(height: 30)
             .onReceive(timer) { _ in
