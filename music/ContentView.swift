@@ -1697,8 +1697,8 @@ struct AlbumListView: View {
     @State private var showFavoritesOnly = false
     
     // NEW: Filter & Sort State
-    @State private var sortType: AlbumSortType = .titleAZ
-    @State private var filterType: AlbumFilterType = .all
+    @State private var sortType: SharedAlbumSort = .titleAZ
+    @State private var filterType: SharedAlbumFilter = .all
     @State private var selectedGenre: String = "All Genres"
     
     @State private var isScrubbing = false
@@ -1923,14 +1923,14 @@ struct AlbumListView: View {
                     }
                     Section(header: Text("Filter")) {
                         Picker("Filter", selection: $filterType) {
-                            ForEach(AlbumFilterType.allCases, id: \.self) { type in
+                            ForEach(SharedAlbumFilter.allCases, id: \.self) { type in
                                 Text(type.rawValue).tag(type)
                             }
                         }
                     }
                     Section(header: Text("Sort")) {
                         Picker("Sort By", selection: $sortType) {
-                            ForEach(AlbumSortType.allCases, id: \.self) { type in
+                            ForEach(SharedAlbumSort.allCases, id: \.self) { type in
                                 Text(type.rawValue).tag(type)
                             }
                         }
