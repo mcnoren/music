@@ -427,11 +427,19 @@ class MultipeerManager: NSObject, ObservableObject {
     func sendFile(url: URL) {
         guard let peer = session.connectedPeers.first else { return }
         let hasAccess = url.startAccessingSecurityScopedResource()
+        
+        // EDGE CASE FIX: Prevent infinite queue hangs on iOS if file is missing from disk!
+        if !FileManager.default.fileExists(atPath: url.path) {
+            if hasAccess { url.stopAccessingSecurityScopedResource() }
+            self.sendCommand("DOWNLOAD_ERROR:File not found on Mac.")
+            return
+        }
+        
         session.sendResource(at: url, withName: url.lastPathComponent, toPeer: peer) { [weak self] error in
             if hasAccess { url.stopAccessingSecurityScopedResource() }
             if let error = error {
                 print("File transfer failed: \(error)")
-                self?.sendCommand("DOWNLOAD_ERROR:Failed to read file on Mac. Check macOS folder permissions.")
+                self?.sendCommand("DOWNLOAD_ERROR:Transfer interrupted or file unreadable.")
             }
         }
     }
@@ -631,13 +639,37 @@ extension MultipeerManager: MCSessionDelegate, MCNearbyServiceAdvertiserDelegate
                     self.downloadMessage = syncCmd.command.replacingOccurrences(of: "DOWNLOAD_ERROR:", with: "")
                     self.showDownloadAlert = true
                     
-                    // Recover queue on error
                     if let activeId = self.activeDownloadId {
                         self.downloadQueue.removeAll { $0.id == activeId }
                         self.activeDownloadId = nil
                         self.saveDownloadQueue()
                     }
                     self.processNextDownload()
+                    
+                // --- NEW: REMOTE DELETION HANDLERS ---
+                } else if syncCmd.command.hasPrefix("DELETE_SONG:") {
+                    let songId = syncCmd.command.replacingOccurrences(of: "DELETE_SONG:", with: "")
+                    
+                    // 1. Unstick the active download if it's the one being deleted
+                    if self.activeDownloadId == songId {
+                        self.activeDownloadId = nil
+                        self.processNextDownload()
+                    }
+                    // 2. Clear from queue
+                    self.downloadQueue.removeAll { $0.id == songId }
+                    self.saveDownloadQueue()
+                    
+                    // 3. Tell the UI / DownloadsManager to trash the physical file
+                    NotificationCenter.default.post(name: NSNotification.Name("RemoteDeletedSong"), object: songId)
+                    
+                } else if syncCmd.command.hasPrefix("DELETE_ALBUM:") {
+                    let album = syncCmd.command.replacingOccurrences(of: "DELETE_ALBUM:", with: "")
+                    
+                    // 1. Trigger our existing cancellation method
+                    self.cancelDownloads(for: album)
+                    
+                    // 2. Tell the UI / DownloadsManager to trash the physical files
+                    NotificationCenter.default.post(name: NSNotification.Name("RemoteDeletedAlbum"), object: album)
                 }
                 #elseif os(macOS)
                 if syncCmd.command == "REQUEST_LIBRARY" {
@@ -738,7 +770,6 @@ extension MultipeerManager: MCSessionDelegate, MCNearbyServiceAdvertiserDelegate
     
     // 4. Finish Receiving File Streams
     func session(_ session: MCSession, didFinishReceivingResourceWithName resourceName: String, fromPeer peerID: MCPeerID, at localURL: URL?, withError error: (any Error)?) {
-        guard let tempURL = localURL else { return }
         
         #if os(iOS)
         DispatchQueue.main.async {
@@ -747,12 +778,35 @@ extension MultipeerManager: MCSessionDelegate, MCNearbyServiceAdvertiserDelegate
                 self.librarySyncObservation?.invalidate()
                 self.librarySyncObservation = nil
                 
-                if error == nil {
-                    if let data = try? Data(contentsOf: tempURL) {
-                        self.processReceivedData(data)
-                    }
+                if error == nil, let temp = localURL, let data = try? Data(contentsOf: temp) {
+                    self.processReceivedData(data)
                 }
+                if let temp = localURL { try? FileManager.default.removeItem(at: temp) }
+                return
+            }
+            
+            // --- EDGE CASE FIX 1: App Closures or Network Drops ---
+            // If the connection breaks mid-download, throw it away and progress the queue so it isn't stuck forever.
+            if let error = error {
+                print("Resource transfer failed (\(resourceName)): \(error.localizedDescription)")
+                self.currentDownloads.removeValue(forKey: resourceName)
                 
+                if let activeId = self.activeDownloadId {
+                    self.downloadQueue.removeAll { $0.id == activeId }
+                    self.activeDownloadId = nil
+                    self.saveDownloadQueue()
+                }
+                self.processNextDownload()
+                return
+            }
+            
+            guard let tempURL = localURL else { return }
+            
+            // --- EDGE CASE FIX 2: Zombie / Cancelled Downloads ---
+            // If the user cancelled this album while it was still flying through the air, trash the temp file!
+            if self.cancelledDownloads.contains(resourceName) {
+                self.cancelledDownloads.remove(resourceName)
+                self.currentDownloads.removeValue(forKey: resourceName)
                 try? FileManager.default.removeItem(at: tempURL)
                 return
             }
@@ -785,7 +839,6 @@ extension MultipeerManager: MCSessionDelegate, MCNearbyServiceAdvertiserDelegate
                 }
                 
                 // --- PROGRESS THE QUEUE ---
-                // Remove the finished song and trigger the next one!
                 if let activeId = self.activeDownloadId {
                     self.downloadQueue.removeAll { $0.id == activeId }
                     self.activeDownloadId = nil

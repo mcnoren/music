@@ -104,6 +104,7 @@ class AppSettings: ObservableObject {
     @Published var lyricColorName: LyricColorName { didSet { UserDefaults.standard.set(lyricColorName.rawValue, forKey: "lyricColorName") } }
     @Published var showMacTab: Bool = true { didSet { UserDefaults.standard.set(showMacTab, forKey: "showMacTab") } }
     @Published var rewindCountdown: Bool { didSet { UserDefaults.standard.set(rewindCountdown, forKey: "rewindCountdown") } }
+    @Published var useSystemAudioControls: Bool { didSet { UserDefaults.standard.set(useSystemAudioControls, forKey: "useSystemAudioControls"); AudioManager.shared.updateAudioSession() } }
     
     init() {
         self.landscapeMode = LandscapeMode(rawValue: UserDefaults.standard.string(forKey: "landscapeMode") ?? "") ?? .coverFlow
@@ -122,6 +123,12 @@ class AppSettings: ObservableObject {
             self.rewindCountdown = true
         } else {
             self.rewindCountdown = UserDefaults.standard.bool(forKey: "rewindCountdown")
+        }
+        
+        if UserDefaults.standard.object(forKey: "useSystemAudioControls") == nil {
+            self.useSystemAudioControls = true
+        } else {
+            self.useSystemAudioControls = UserDefaults.standard.bool(forKey: "useSystemAudioControls")
         }
     }
     
@@ -458,10 +465,18 @@ struct PortraitLayout: View {
                         .toolbarBackground(.hidden, for: .navigationBar)
                 }
                 .navigationDestination(for: RemoteAlbumWrapper.self) { wrapper in
-                    UniversalAlbumDetailView(albumName: wrapper.name, collection: .remote(wrapper.songs))
-                        .onAppear { navState.currentAlbumID = "remote_\(wrapper.name)" }
-                        .onDisappear { if navState.currentAlbumID == "remote_\(wrapper.name)" { navState.currentAlbumID = nil } }
-                        .toolbarBackground(.hidden, for: .navigationBar)
+                    let localSongs = DownloadsManager.shared.downloadedSongs.filter { $0.album == wrapper.name }
+                    if !localSongs.isEmpty {
+                        UniversalAlbumDetailView(albumName: wrapper.name, collection: .downloads(localSongs))
+                            .onAppear { navState.currentAlbumID = "local_\(wrapper.name)" }
+                            .onDisappear { if navState.currentAlbumID == "local_\(wrapper.name)" { navState.currentAlbumID = nil } }
+                            .toolbarBackground(.hidden, for: .navigationBar)
+                    } else {
+                        UniversalAlbumDetailView(albumName: wrapper.name, collection: .remote(wrapper.songs))
+                            .onAppear { navState.currentAlbumID = "remote_\(wrapper.name)" }
+                            .onDisappear { if navState.currentAlbumID == "remote_\(wrapper.name)" { navState.currentAlbumID = nil } }
+                            .toolbarBackground(.hidden, for: .navigationBar)
+                    }
                 }
                 .navigationDestination(for: RemoteArtistWrapper.self) { wrapper in
                     RemoteArtistDetailView(artistName: wrapper.name, multipeer: MultipeerManager.shared)
@@ -527,13 +542,32 @@ struct PortraitLayout: View {
                 
             // 3. Check if it's a Remote Mac Stream
             } else if let remoteSong = audioManager.currentRemoteDTO, remoteSong.id == songId {
-                let targetAlbumID = "remote_\(remoteSong.album)"
-                if navState.currentAlbumID == targetAlbumID { return }
+                let localSongs = DownloadsManager.shared.downloadedSongs.filter { $0.album == remoteSong.album }
                 
-                let item = RemoteAlbumWrapper(name: remoteSong.album, songs: [])
-                var newPath = NavigationPath()
-                newPath.append(item)
-                navState.navigationPath = newPath
+                if !localSongs.isEmpty {
+                    let targetAlbumID = "local_\(remoteSong.album)"
+                    if navState.currentAlbumID == targetAlbumID { return }
+                    
+                    let item = UnifiedAlbumItem(
+                        id: targetAlbumID,
+                        title: remoteSong.album,
+                        artist: remoteSong.artist,
+                        sortTitle: remoteSong.album,
+                        appleAlbum: nil,
+                        localWrapper: LocalAlbumWrapper(name: remoteSong.album, songs: localSongs)
+                    )
+                    var newPath = NavigationPath()
+                    newPath.append(item)
+                    navState.navigationPath = newPath
+                } else {
+                    let targetAlbumID = "remote_\(remoteSong.album)"
+                    if navState.currentAlbumID == targetAlbumID { return }
+                    
+                    let item = RemoteAlbumWrapper(name: remoteSong.album, songs: [])
+                    var newPath = NavigationPath()
+                    newPath.append(item)
+                    navState.navigationPath = newPath
+                }
             }
         }
     }
@@ -1733,10 +1767,18 @@ struct AlbumListView: View {
         if selectedGenre != "All Genres" { remoteAlbumNames = remoteAlbumNames.filter { (groupedRemote[$0]?.first?.genre ?? "Album") == selectedGenre } }
         
         let localAlbumNamesSet = Set(filteredLocalNames)
-        remoteAlbumNames = remoteAlbumNames.filter { !localAlbumNamesSet.contains($0) }
-        
-        var unified: [UnifiedAlbumItem] = []
-        unified.append(contentsOf: appleAlbums.map {
+            remoteAlbumNames = remoteAlbumNames.filter { !localAlbumNamesSet.contains($0) }
+            
+            // APPLY THE MISSING FILTER LOGIC
+            if filterType == .downloaded {
+                remoteAlbumNames = [] // Hide Mac Library
+            } else if filterType == .remote {
+                appleAlbums = [] // Hide Apple Music
+                filteredLocalNames = [] // Hide Downloads
+            }
+            
+            var unified: [UnifiedAlbumItem] = []
+            unified.append(contentsOf: appleAlbums.map {
             UnifiedAlbumItem(id: String($0.persistentID), title: $0.representativeItem?.albumTitle ?? "Unknown", artist: $0.representativeItem?.artist ?? "Unknown", sortTitle: $0.representativeItem?.albumTitle ?? "Unknown", appleAlbum: $0, localWrapper: nil)
         })
         unified.append(contentsOf: filteredLocalNames.map { name in
@@ -2026,7 +2068,6 @@ struct AlbumDetailView: View {
                                                 .frame(width: geo.size.width, height: geo.size.height + overscroll, alignment: .bottom)
                                                 .clipped()
                                                 .offset(y: scrollUpOffset)
-                                                // Apply your existing bottom gradient fade
                                                 .mask(
                                                     LinearGradient(
                                                         stops: [
@@ -2038,11 +2079,9 @@ struct AlbumDetailView: View {
                                                         endPoint: .bottom
                                                     )
                                                     .ignoresSafeArea()
-                                                    .offset(y: -scrollUpOffset)
                                                 )
                                                 .offset(y: -overscroll)
                                                 
-                                        // 2. FALLBACK TO ORIGINAL IMAGE LOGIC
                                         } else if let img = originalArtwork {
                                             let finalArtwork: UIImage = {
                                                 if let cropData = library.albumArtCrops[albumID] {
@@ -2069,7 +2108,6 @@ struct AlbumDetailView: View {
                                                         endPoint: .bottom
                                                     )
                                                     .ignoresSafeArea()
-                                                    .offset(y: -scrollUpOffset)
                                                 )
                                                 .offset(y: -overscroll)
                                         } else {
@@ -2089,7 +2127,6 @@ struct AlbumDetailView: View {
                                                         endPoint: .bottom
                                                     )
                                                     .ignoresSafeArea()
-                                                    .offset(y: -scrollUpOffset)
                                                 )
                                                 .offset(y: -overscroll)
                                         }
@@ -3738,6 +3775,10 @@ struct SettingsView: View {
                     TimingTextField(title: "End Song Early By", value: $settings.globalEndOffset)
                 }
                 
+                Section(header: Text("Audio"), footer: Text("When enabled, the app will show in the Lock Screen and Control Center. When disabled, audio mixes with other apps and plays constantly in the background.")) {
+                    Toggle("System Audio Controls", isOn: $settings.useSystemAudioControls)
+                }
+                
                 Section(header: Text("Sync Editor")) {
                     Toggle("Countdown on Rewind", isOn: $settings.rewindCountdown)
                 }
@@ -4455,6 +4496,14 @@ struct DynamicAlbumWrapper: View {
             UniversalAlbumDetailView(albumName: local.name, collection: .downloads(local.songs))
         } else if let remote = item.remoteWrapper {
             UniversalAlbumDetailView(albumName: remote.name, collection: .remote(remote.songs))
+        } else if let remote = item.remoteWrapper {
+            // CRITICAL FIX: Intercept remote wrappers and force them to local if downloaded
+            let localMatch = downloads.downloadedSongs.filter { $0.album == remote.name }
+            if !localMatch.isEmpty {
+                UniversalAlbumDetailView(albumName: remote.name, collection: .downloads(localMatch))
+            } else {
+                UniversalAlbumDetailView(albumName: remote.name, collection: .remote(remote.songs))
+            }
         } else {
             // 2. GHOST STATE: Actively scan the live library arrays to see if it finished loading in the background
             let appleID = item.id.hasPrefix("apple_") ? String(item.id.dropFirst(6)) : nil
@@ -4464,9 +4513,10 @@ struct DynamicAlbumWrapper: View {
             if let aID = appleID, let liveApple = library.albums.first(where: { String($0.persistentID) == aID }) {
                 AlbumDetailView(album: liveApple, audioManager: audioManager, library: library)
                 
-            } else if let lName = localName, !downloads.downloadedSongs.filter({ $0.album == lName }).isEmpty {
-                let liveSongs = downloads.downloadedSongs.filter({ $0.album == lName })
-                UniversalAlbumDetailView(albumName: lName, collection: .downloads(liveSongs))
+            } else if let name = localName ?? remoteName, !downloads.downloadedSongs.filter({ $0.album == name }).isEmpty {
+                // By coalescing localName and remoteName, we force ghost remote clicks to resolve locally if the files exist!
+                let liveSongs = downloads.downloadedSongs.filter({ $0.album == name })
+                UniversalAlbumDetailView(albumName: name, collection: .downloads(liveSongs))
                 
             } else if let rName = remoteName, !library.cachedRemoteLibrary.filter({ $0.album == rName }).isEmpty {
                 let liveSongs = library.cachedRemoteLibrary.filter({ $0.album == rName })

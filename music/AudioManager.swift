@@ -111,14 +111,26 @@ class AudioManager: NSObject, ObservableObject {
         NotificationCenter.default.removeObserver(self)
     }
     
-    private func setupAudioSession() {
+    func updateAudioSession() {
         do {
-            // Add options: [.mixWithOthers] here
-            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers])
+            let useSystemControls = UserDefaults.standard.object(forKey: "useSystemAudioControls") == nil ? true : UserDefaults.standard.bool(forKey: "useSystemAudioControls")
+            let options: AVAudioSession.CategoryOptions = useSystemControls ? [] : [.mixWithOthers]
+            
+            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: options)
             try AVAudioSession.sharedInstance().setActive(true)
+            
+            if !useSystemControls {
+                MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+            } else {
+                updateLockScreenInfo()
+            }
         } catch {
-            print("Failed to set audio session category. Error: \(error)")
+            print("Failed to update audio session category. Error: \(error)")
         }
+    }
+
+    private func setupAudioSession() {
+        updateAudioSession()
     }
     
     private func setupNotifications() {
@@ -133,10 +145,7 @@ class AudioManager: NSObject, ObservableObject {
         player.pause(); currentSong = nil
         
         // Add options: [.mixWithOthers] here as well
-        do {
-            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers])
-            try AVAudioSession.sharedInstance().setActive(true)
-        } catch { }
+        updateAudioSession()
         
         self.localQueue = queue.isEmpty ? [localSong] : queue
         self.currentLocalSong = localSong
@@ -523,6 +532,12 @@ class AudioManager: NSObject, ObservableObject {
     
     // MARK: - Control Center & Lock Screen UI
     func updateLockScreenInfo() {
+        let useSystemControls = UserDefaults.standard.object(forKey: "useSystemAudioControls") == nil ? true : UserDefaults.standard.bool(forKey: "useSystemAudioControls")
+        guard useSystemControls else {
+            MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+            return
+        }
+        
         if let local = currentLocalSong {
             var info: [String: Any] = [
                 MPMediaItemPropertyTitle: local.title,

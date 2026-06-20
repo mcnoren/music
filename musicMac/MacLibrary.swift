@@ -214,6 +214,9 @@ class MacLibrary: ObservableObject {
             playlists[i].songIDs.removeAll { $0 == song.id }
         }
         savePlaylists()
+        
+        // 3. Notify iPhone to delete it and cancel active downloads
+        MultipeerManager.shared.sendCommand("DELETE_SONG:\(song.id)")
     }
     
     func clearAllFiles() {
@@ -234,6 +237,9 @@ class MacLibrary: ObservableObject {
             playlists[i].songIDs = playlists[i].songIDs.filter { validSongIDs.contains($0) }
         }
         savePlaylists()
+        
+        // 3. Notify iPhone to delete it and cancel active downloads
+        MultipeerManager.shared.sendCommand("DELETE_ALBUM:\(albumName)")
     }
     
     func saveAlbumSettings(albumId: String, colors: [String: String]?, transform: AlbumArtTransform?) {
@@ -292,7 +298,11 @@ class MacLibrary: ObservableObject {
     // MARK: - File Importing
     func importFolder() {
         let panel = NSOpenPanel()
-        panel.canChooseFiles = true; panel.canChooseDirectories = true; panel.allowsMultipleSelection = true; panel.allowedContentTypes = [.audio]
+        panel.message = "Select a folder to import your music"
+        panel.prompt = "Import Folder"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = true
         
         if panel.runModal() == .OK {
             isImporting = true

@@ -42,6 +42,19 @@ class DownloadsManager: ObservableObject {
         loadFastCache() // 1. INSTANTLY load the UI from the JSON cache
         loadDownloads() // 2. Check the file system in the background for new files
         NotificationCenter.default.addObserver(self, selector: #selector(loadDownloads), name: NSNotification.Name("NewDownloadComplete"), object: nil)
+        NotificationCenter.default.addObserver(forName: NSNotification.Name("RemoteDeletedSong"), object: nil, queue: .main) { [weak self] notification in
+            if let songId = notification.object as? String {
+                // Find the song, remove it from your arrays, and delete the actual file
+                self?.deleteSong(id: songId)
+            }
+        }
+
+        NotificationCenter.default.addObserver(forName: NSNotification.Name("RemoteDeletedAlbum"), object: nil, queue: .main) { [weak self] notification in
+            if let albumName = notification.object as? String {
+                // Find all songs belonging to the album and delete their files
+                self?.deleteAlbum(name: albumName)
+            }
+        }
     }
     
     // MARK: - Fast Caching Logic
